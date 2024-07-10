@@ -28,13 +28,12 @@ class HistoricoController extends Controller
         $farmacia = $request->query('farmacia');
         $data_inicio = $request->query('data-inicio');
         $data_fim = $request->query('data-fim');
+        $noPaginate = $request->query->has('no_paginate');
 
-        // Decodifica '+' para ' ' caso esteja presente na descrição
         if ($descricao) {
             $descricao = str_replace('+', ' ', $descricao);
         }
 
-        // Converte a string de farmacia em um array de IDs
         $farmaciasIds = [];
         if ($farmacia) {
             $farmacia = str_replace('+', ' ', $farmacia);
@@ -46,19 +45,16 @@ class HistoricoController extends Controller
             ->join('farmacias', 'precos.farmacia_id', '=', 'farmacias.farmacia_id')
             ->select('produtos.descricao', 'produtos.EAN', 'farmacias.nome_farmacia', 'precos.preco', 'precos.data');
 
-        // Filtro por EAN ou descricao
         if ($ean) {
             $query->where('produtos.EAN', $ean);
         } elseif ($descricao) {
             $query->where('produtos.descricao', 'like', '%' . $descricao . '%');
         }
 
-        // Filtro por farmacias
         if (!empty($farmaciasIds)) {
             $query->whereIn('precos.farmacia_id', $farmaciasIds);
         }
 
-        // Filtro por data_inicio e data_fim
         if ($data_inicio && $data_fim) {
             $query->whereBetween('precos.data', [$data_inicio, $data_fim]);
         } elseif ($data_inicio) {
@@ -67,8 +63,11 @@ class HistoricoController extends Controller
             $query->where('precos.data', '<=', $data_fim);
         }
 
-        // Paginação com 100 itens por página
-        $resultados = $query->paginate(100);
+        if ($noPaginate) {
+            $resultados = $query->get();
+        } else {
+            $resultados = $query->paginate(100);
+        }
 
         if ($resultados->isEmpty()) {
             return response()->json(['message' => 'Nenhum resultado encontrado.'], 404);
@@ -91,13 +90,16 @@ class HistoricoController extends Controller
             ];
         }
 
-        return response()->json([
-            'data' => array_values($historico),
-            'current_page' => $resultados->currentPage(),
-            'last_page' => $resultados->lastPage(),
-            'per_page' => $resultados->perPage(),
-            'total' => $resultados->total()
-        ]);
+        if ($noPaginate) {
+            return response()->json(['data' => array_values($historico)]);
+        } else {
+            return response()->json([
+                'data' => array_values($historico),
+                'current_page' => $resultados->currentPage(),
+                'last_page' => $resultados->lastPage(),
+                'per_page' => $resultados->perPage(),
+                'total' => $resultados->total()
+            ]);
+        }
     }
 }
-
