@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
+use App\Models\Preco;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 
@@ -79,5 +80,58 @@ class PrecoController extends Controller
                 'total' => $resultados->total()
             ]);
         }
+    }
+
+    // Método para inserir preço
+    public function store(Request $request)
+    {
+        $validatedData = $request->validate([
+            'farmacia_id' => 'required|integer|exists:farmacias,farmacia_id',
+            'produto_id' => 'required|numeric|exists:produtos,produto_id',
+            'preco' => 'required|numeric',
+            'data' => 'required|date',
+        ]);
+
+        // Verificar se já existe um preço semelhante
+        $precoExistente = Preco::where('farmacia_id', $validatedData['farmacia_id'])
+            ->where('produto_id', $validatedData['produto_id'])
+            ->where('preco', '>=', $validatedData['preco'] - 0.01)
+            ->where('preco', '<=', $validatedData['preco'] + 0.01)
+            ->first();
+
+        if ($precoExistente) {
+            return response()->json(['message' => 'Preço semelhante já existe', 'preco_bd' => $precoExistente], 409);
+        }
+
+        $preco = Preco::create($validatedData);
+
+        return response()->json($preco, 201);
+    }
+
+    public function obterPrecoAtual(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'farmacia_id' => 'required|integer|exists:farmacias,farmacia_id',
+            'produto_id' => 'required|integer|exists:produtos,produto_id',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['error' => $validator->errors()], 400);
+        }
+
+        $farmaciaId = $request->query('farmacia_id');
+        $produtoId = $request->query('produto_id');
+
+        $precoAtual = DB::table('precos')
+            ->where('farmacia_id', $farmaciaId)
+            ->where('produto_id', $produtoId)
+            ->orderBy('data', 'desc')
+            ->first();
+
+        if (!$precoAtual) {
+            return response()->json(['message' => 'Preço não encontrado.'], 404);
+        }
+
+        return response()->json($precoAtual);
     }
 }

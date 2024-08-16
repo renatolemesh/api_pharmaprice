@@ -12,6 +12,13 @@ class Farmacia extends Model
     protected $table = 'farmacias';
     protected $primaryKey = 'farmacia_id';
 
+    protected $fillable = [
+        'nome_farmacia'
+    ];
+
+    public $timestamps = false;
+
+
     public function informacoesProduto()
     {
         return $this->hasMany(InformacoesProduto::class, 'farmacia_id', 'farmacia_id');

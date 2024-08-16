@@ -12,6 +12,15 @@ class InformacoesProduto extends Model
     protected $table = 'informacoes_produtos';
     protected $primaryKey = 'informacao_id';
 
+    protected $fillable = [
+        'farmacia_id',
+        'produto_id',
+        'link',
+        'sku'
+    ];
+
+    public $timestamps = false;
+
     public function farmacia()
     {
         return $this->belongsTo(Farmacia::class, 'farmacia_id', 'farmacia_id');

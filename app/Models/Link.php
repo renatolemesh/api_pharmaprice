@@ -11,6 +11,14 @@ class Link extends Model
 
     protected $table = 'links';
 
+    protected $fillable = [
+        'farmacia_id',
+        'link'
+    ];
+
+    public $timestamps = false;
+
+    
     public function farmacia()
     {
         return $this->belongsTo(Farmacia::class, 'farmacia_id', 'farmacia_id');
