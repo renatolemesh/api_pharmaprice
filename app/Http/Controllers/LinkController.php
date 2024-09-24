@@ -30,4 +30,25 @@ class LinkController extends Controller
 
         return response()->json(['message' => 'Link removido com sucesso'], 200);
     }
+
+    public function store(Request $request)
+    {
+        $validatedData = $request->validate([
+            'farmacia_id' => 'required|integer|exists:farmacias,farmacia_id',
+            'link' => 'required',
+        ]);
+
+        // Verificar se o link já existe
+        $linkExistente = Link::where('farmacia_id', $validatedData['farmacia_id'])
+            ->where('link', $validatedData['link'])
+            ->first();
+
+        if ($linkExistente) {
+            return response()->json(['message' => 'link já existe', 'link' => $linkExistente], 409);
+        }
+
+        $link = Link::create($validatedData);
+
+        return response()->json($link, 201);
+    }
 }

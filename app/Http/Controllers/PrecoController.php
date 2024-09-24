@@ -95,7 +95,7 @@ class PrecoController extends Controller
         // Verificar se já existe um preço semelhante
         $precoExistente = Preco::where('farmacia_id', $validatedData['farmacia_id'])
             ->where('produto_id', $validatedData['produto_id'])
-            ->where('preco', '>=', $validatedData['preco'] - 0.01)
+          ->where('preco', '>=', $validatedData['preco'] - 0.01)
             ->where('preco', '<=', $validatedData['preco'] + 0.01)
             ->first();
 

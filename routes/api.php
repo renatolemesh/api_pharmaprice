@@ -24,4 +24,5 @@ Route::post('/precos', [PrecoController::class, 'store']);
 Route::get('preco_atual', [PrecoController::class, 'obterPrecoAtual']);
 Route::delete('/links', [LinkController::class, 'destroy']);
 Route::get('/links', [LinkController::class, 'index']);
+Route::post('/links', [LinkController::class, 'store']);
 
