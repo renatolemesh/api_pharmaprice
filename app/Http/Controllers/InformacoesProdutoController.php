@@ -50,4 +50,12 @@ class InformacoesProdutoController extends Controller
 
         return response()->json($informacaoProduto, 201);
     }
+
+    public function indexAll()
+    {
+        // Busca todas as informações dos produtos
+        $informacoes_produto = InformacoesProduto::all();
+
+        return response()->json($informacoes_produto);
+    }
 }

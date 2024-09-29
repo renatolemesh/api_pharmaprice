@@ -20,6 +20,7 @@ Route::post('/produtos', [ProdutoController::class, 'store']);
 Route::get('/produtos', [ProdutoController::class, 'index']);
 Route::post('/informacoes_produtos', [InformacoesProdutoController::class, 'store']);
 Route::get('/informacoes_produtos', [InformacoesProdutoController::class, 'index']);
+Route::get('/informacoes_produtos/all', [InformacoesProdutoController::class, 'indexAll']);
 Route::post('/precos', [PrecoController::class, 'store']);
 Route::get('preco_atual', [PrecoController::class, 'obterPrecoAtual']);
 Route::delete('/links', [LinkController::class, 'destroy']);

@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\Link;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Redis;
 
 class LinkController extends Controller
 {
@@ -15,7 +17,10 @@ class LinkController extends Controller
             return response()->json(['error' => 'farmacia_id is required'], 400);
         }
 
-        $links = Link::where('farmacia_id', $farmaciaId)->get();
+        // Tenta recuperar os links do cache
+        $links = Cache::remember("links_farmacia_{$farmaciaId}", 60, function () use ($farmaciaId) {
+            return Link::where('farmacia_id', $farmaciaId)->get();
+        });
 
         return response()->json($links);
     }
