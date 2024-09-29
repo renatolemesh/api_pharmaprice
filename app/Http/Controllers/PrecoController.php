@@ -39,7 +39,7 @@ class PrecoController extends Controller
         $query = DB::table('precos')
             ->join('produtos', 'precos.produto_id', '=', 'produtos.produto_id')
             ->join('farmacias', 'precos.farmacia_id', '=', 'farmacias.farmacia_id')
-            ->select('produtos.descricao', 'produtos.EAN', 'farmacias.nome_farmacia', 'precos.preco', 'precos.data');
+            ->select('produtos.descricao', 'produtos.EAN', 'farmacias.nome_farmacia', 'precos.preco', 'precos.data', 'produtos.produto_id');    
 
         if ($ean) {
             $query->where('produtos.EAN', $ean);
