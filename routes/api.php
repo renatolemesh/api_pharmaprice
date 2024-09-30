@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\DescricaoController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\PrecoController;
 use App\Http\Controllers\HistoricoController;
@@ -26,4 +27,5 @@ Route::get('preco_atual', [PrecoController::class, 'obterPrecoAtual']);
 Route::delete('/links', [LinkController::class, 'destroy']);
 Route::get('/links', [LinkController::class, 'index']);
 Route::post('/links', [LinkController::class, 'store']);
+Route::get('/descricoes', [DescricaoController::class, 'index']);
 
