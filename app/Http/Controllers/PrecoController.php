@@ -5,8 +5,10 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\Preco;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 
+DB::enableQueryLog();
 class PrecoController extends Controller
 {
     public function consultar(Request $request)
@@ -27,7 +29,7 @@ class PrecoController extends Controller
         $noPaginate = $request->query->has('no_paginate');
 
         if ($descricao) {
-            $descricao = str_replace('+', ' ', $descricao);
+            $descricao = preg_replace('/\s+/', ' ', trim($descricao));
         }
 
         $farmaciasIds = [];
@@ -35,7 +37,7 @@ class PrecoController extends Controller
             $farmacia = str_replace('+', ' ', $farmacia);
             $farmaciasIds = explode(' ', $farmacia);
         }
-
+       
         $query = DB::table('precos')
             ->join('produtos', 'precos.produto_id', '=', 'produtos.produto_id')
             ->join('farmacias', 'precos.farmacia_id', '=', 'farmacias.farmacia_id')
@@ -80,33 +82,72 @@ class PrecoController extends Controller
                 'total' => $resultados->total()
             ]);
         }
+        $logQueries = DB::getQueryLog();
+        Log::info($logQueries);
     }
 
     // Método para inserir preço
     public function store(Request $request)
-    {
-        $validatedData = $request->validate([
-            'farmacia_id' => 'required|integer|exists:farmacias,farmacia_id',
-            'produto_id' => 'required|numeric|exists:produtos,produto_id',
-            'preco' => 'required|numeric',
-            'data' => 'required|date',
-        ]);
+        {
+            $validatedData = $request->validate([
+                'precos' => 'required|array',
+                'precos.*.farmacia_id' => 'required|integer|exists:farmacias,farmacia_id',
+                'precos.*.produto_id' => 'required|numeric|exists:produtos,produto_id',
+                'precos.*.preco' => 'required|numeric',
+                'precos.*.data' => 'required|date',
+            ]);
 
-        // Verificar se já existe um preço semelhante
-        $precoExistente = Preco::where('farmacia_id', $validatedData['farmacia_id'])
-            ->where('produto_id', $validatedData['produto_id'])
-          ->where('preco', '>=', $validatedData['preco'] - 0.01)
-            ->where('preco', '<=', $validatedData['preco'] + 0.01)
-            ->first();
+            $resultados = [];
+            $conflitos = [];
 
-        if ($precoExistente) {
-            return response()->json(['message' => 'Preço semelhante já existe', 'preco_bd' => $precoExistente], 409);
+            foreach ($validatedData['precos'] as $dados) {
+                // Busca o preço mais recente
+                $precoExistente = Preco::where('farmacia_id', $dados['farmacia_id'])
+                    ->where('produto_id', $dados['produto_id'])
+                    ->orderBy('data', 'desc')
+                    ->first();
+
+                // Se não há preço existente, podemos inserir
+                if (!$precoExistente) {
+                    try {
+                        $preco = Preco::create($dados);
+                        $resultados[] = $preco;
+                    } catch (\Exception $e) {
+                        $conflitos[] = [
+                            'produto_id' => $dados['produto_id'],
+                            'message' => 'Erro ao inserir preço: ' . $e->getMessage(),
+                        ];
+                    }
+                    continue; // Pula para o próximo item
+                }
+
+                // Compara o novo preço apenas com o preço mais recente
+                if (abs($precoExistente->preco - $dados['preco']) <= 0.01) {
+                    $conflitos[] = [
+                        'produto_id' => $dados['produto_id'],
+                        'message' => 'Preço semelhante já existe',
+                    ];
+                    continue; // Pula para o próximo item
+                }
+
+                try {
+                    // Criar um novo registro de preço
+                    $preco = Preco::create($dados);
+                    $resultados[] = $preco;
+                } catch (\Exception $e) {
+                    $conflitos[] = [
+                        'produto_id' => $dados['produto_id'],
+                        'message' => 'Erro ao inserir preço: ' . $e->getMessage(),
+                    ];
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'resultados' => $resultados,
+                'conflitos' => $conflitos,
+            ], 200);
         }
-
-        $preco = Preco::create($validatedData);
-
-        return response()->json($preco, 201);
-    }
 
     public function obterPrecoAtual(Request $request)
     {
