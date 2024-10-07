@@ -82,46 +82,41 @@ class PrecoController extends Controller
                 'total' => $resultados->total()
             ]);
         }
-        $logQueries = DB::getQueryLog();
-        Log::info($logQueries);
+        
     }
 
     // Método para inserir preço
     public function store(Request $request)
-        {
-            $validatedData = $request->validate([
-                'precos' => 'required|array',
-                'precos.*.farmacia_id' => 'required|integer|exists:farmacias,farmacia_id',
-                'precos.*.produto_id' => 'required|numeric|exists:produtos,produto_id',
-                'precos.*.preco' => 'required|numeric',
-                'precos.*.data' => 'required|date',
-            ]);
+    {
+        $validatedData = $request->validate([
+            'precos' => 'required|array',
+            'precos.*.farmacia_id' => 'required|integer|exists:farmacias,farmacia_id',
+            'precos.*.produto_id' => 'required|numeric|exists:produtos,produto_id',
+            'precos.*.preco' => 'required|numeric',
+            'precos.*.data' => 'required|date',
+        ]);
 
-            $resultados = [];
-            $conflitos = [];
+        $resultados = [];
+        $conflitos = [];
 
-            foreach ($validatedData['precos'] as $dados) {
-                // Busca o preço mais recente
-                $precoExistente = Preco::where('farmacia_id', $dados['farmacia_id'])
-                    ->where('produto_id', $dados['produto_id'])
-                    ->orderBy('data', 'desc')
-                    ->first();
+        // Obter todos os preços existentes de uma só vez
+        $existingPrices = Preco::whereIn('farmacia_id', array_column($validatedData['precos'], 'farmacia_id'))
+            ->whereIn('produto_id', array_column($validatedData['precos'], 'produto_id'))
+            ->get()
+            ->keyBy(function ($item) {
+                return $item->farmacia_id . '-' . $item->produto_id;
+            });
 
-                // Se não há preço existente, podemos inserir
-                if (!$precoExistente) {
-                    try {
-                        $preco = Preco::create($dados);
-                        $resultados[] = $preco;
-                    } catch (\Exception $e) {
-                        $conflitos[] = [
-                            'produto_id' => $dados['produto_id'],
-                            'message' => 'Erro ao inserir preço: ' . $e->getMessage(),
-                        ];
-                    }
-                    continue; // Pula para o próximo item
-                }
+        $novosPrecos = [];
 
-                // Compara o novo preço apenas com o preço mais recente
+        foreach ($validatedData['precos'] as $dados) {
+            $key = $dados['farmacia_id'] . '-' . $dados['produto_id'];
+
+            // Verifica se já existe um preço
+            if (isset($existingPrices[$key])) {
+                $precoExistente = $existingPrices[$key];
+
+                // Compara o novo preço com o preço mais recente
                 if (abs($precoExistente->preco - $dados['preco']) <= 0.01) {
                     $conflitos[] = [
                         'produto_id' => $dados['produto_id'],
@@ -129,25 +124,30 @@ class PrecoController extends Controller
                     ];
                     continue; // Pula para o próximo item
                 }
-
-                try {
-                    // Criar um novo registro de preço
-                    $preco = Preco::create($dados);
-                    $resultados[] = $preco;
-                } catch (\Exception $e) {
-                    $conflitos[] = [
-                        'produto_id' => $dados['produto_id'],
-                        'message' => 'Erro ao inserir preço: ' . $e->getMessage(),
-                    ];
-                }
             }
 
-            return response()->json([
-                'success' => true,
-                'resultados' => $resultados,
-                'conflitos' => $conflitos,
-            ], 200);
+            // Se não há conflito, prepare para inserir
+            $novosPrecos[] = $dados;
         }
+
+        // Inserir novos preços em massa
+        if (!empty($novosPrecos)) {
+            try {
+                Preco::insert($novosPrecos);
+                $resultados = $novosPrecos; // O retorno pode incluir informações do banco, se necessário
+            } catch (\Exception $e) {
+                $conflitos[] = [
+                    'message' => 'Erro ao inserir preços em massa: ' . $e->getMessage(),
+                ];
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'resultados' => $resultados,
+            'conflitos' => $conflitos,
+        ], 200);
+    }
 
     public function obterPrecoAtual(Request $request)
     {
