@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\Preco;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 
@@ -99,9 +100,11 @@ class PrecoController extends Controller
         $resultados = [];
         $conflitos = [];
 
-        // Obter todos os preços existentes de uma só vez
-        $existingPrices = Preco::whereIn('farmacia_id', array_column($validatedData['precos'], 'farmacia_id'))
-            ->whereIn('produto_id', array_column($validatedData['precos'], 'produto_id'))
+        $farmaciaIds = array_column($validatedData['precos'], 'farmacia_id');
+        $produtoIds = array_column($validatedData['precos'], 'produto_id');
+
+        $existingPrices = Preco::whereIn('farmacia_id', $farmaciaIds)
+            ->whereIn('produto_id', $produtoIds)
             ->get()
             ->keyBy(function ($item) {
                 return $item->farmacia_id . '-' . $item->produto_id;
@@ -112,29 +115,33 @@ class PrecoController extends Controller
         foreach ($validatedData['precos'] as $dados) {
             $key = $dados['farmacia_id'] . '-' . $dados['produto_id'];
 
-            // Verifica se já existe um preço
             if (isset($existingPrices[$key])) {
                 $precoExistente = $existingPrices[$key];
-
-                // Compara o novo preço com o preço mais recente
                 if (abs($precoExistente->preco - $dados['preco']) <= 0.01) {
                     $conflitos[] = [
                         'produto_id' => $dados['produto_id'],
                         'message' => 'Preço semelhante já existe',
                     ];
-                    continue; // Pula para o próximo item
+                    continue;
                 }
             }
 
-            // Se não há conflito, prepare para inserir
             $novosPrecos[] = $dados;
         }
 
-        // Inserir novos preços em massa
         if (!empty($novosPrecos)) {
             try {
-                Preco::insert($novosPrecos);
-                $resultados = $novosPrecos; // O retorno pode incluir informações do banco, se necessário
+                DB::transaction(function () use ($novosPrecos) {
+                    Preco::insert($novosPrecos);
+                });
+                $resultados = $novosPrecos;
+
+                // Limpa o cache para os preços que foram inseridos
+                foreach ($novosPrecos as $dados) {
+                    $cacheKey = "preco_atual_{$dados['farmacia_id']}_{$dados['produto_id']}";
+                    Cache::forget($cacheKey);
+                }
+
             } catch (\Exception $e) {
                 $conflitos[] = [
                     'message' => 'Erro ao inserir preços em massa: ' . $e->getMessage(),
@@ -163,11 +170,17 @@ class PrecoController extends Controller
         $farmaciaId = $request->query('farmacia_id');
         $produtoId = $request->query('produto_id');
 
-        $precoAtual = DB::table('precos')
-            ->where('farmacia_id', $farmaciaId)
-            ->where('produto_id', $produtoId)
-            ->orderBy('data', 'desc')
-            ->first();
+        // Definindo uma chave única para o cache
+        $cacheKey = "preco_atual_{$farmaciaId}_{$produtoId}";
+
+        // Tentando obter o preço do cache
+        $precoAtual = Cache::remember($cacheKey, 3600, function () use ($farmaciaId, $produtoId) {
+            return DB::table('precos')
+                ->where('farmacia_id', $farmaciaId)
+                ->where('produto_id', $produtoId)
+                ->orderBy('data', 'desc')
+                ->first();
+        });
 
         if (!$precoAtual) {
             return response()->json(['message' => 'Preço não encontrado.'], 404);
