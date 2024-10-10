@@ -89,35 +89,50 @@ class PrecoController extends Controller
     // Método para inserir preço
     public function store(Request $request)
     {
+        // Validação dos dados de entrada
         $validatedData = $request->validate([
             'precos' => 'required|array',
-            'precos.*.farmacia_id' => 'required|integer|exists:farmacias,farmacia_id',
-            'precos.*.produto_id' => 'required|numeric|exists:produtos,produto_id',
+            'precos.*.farmacia_id' => 'required|integer',
+            'precos.*.produto_id' => 'required|numeric',
             'precos.*.preco' => 'required|numeric',
             'precos.*.data' => 'required|date',
         ]);
 
+        // Remover duplicatas
+        $validatedData['precos'] = array_values(array_unique($validatedData['precos'], SORT_REGULAR));
+
         $resultados = [];
         $conflitos = [];
 
-        $farmaciaIds = array_column($validatedData['precos'], 'farmacia_id');
-        $produtoIds = array_column($validatedData['precos'], 'produto_id');
+        // Agrupar por farmacia_id e produto_id
+        $novosPrecos = [];
+        foreach ($validatedData['precos'] as $dados) {
+            $key = $dados['farmacia_id'] . '-' . $dados['produto_id'];
+            if (!isset($novosPrecos[$key])) {
+                $novosPrecos[$key] = $dados; // Substitui se já existir
+            }
+        }
 
-        $existingPrices = Preco::whereIn('farmacia_id', $farmaciaIds)
-            ->whereIn('produto_id', $produtoIds)
+        // Obter os preços existentes mais recentes
+        $existingPrices = Preco::select('farmacia_id', 'produto_id', 'preco', 'data')
+            ->whereIn('farmacia_id', array_column($novosPrecos, 'farmacia_id'))
+            ->whereIn('produto_id', array_column($novosPrecos, 'produto_id'))
+            ->whereRaw('(farmacia_id, produto_id, data) IN (
+                SELECT farmacia_id, produto_id, MAX(data) 
+                FROM precos 
+                GROUP BY farmacia_id, produto_id)')
             ->get()
             ->keyBy(function ($item) {
                 return $item->farmacia_id . '-' . $item->produto_id;
             });
 
-        $novosPrecos = [];
-
-        foreach ($validatedData['precos'] as $dados) {
-            $key = $dados['farmacia_id'] . '-' . $dados['produto_id'];
-
+        // Validar e preparar os novos preços
+        $finalPrecos = [];
+        foreach ($novosPrecos as $key => $dados) {
             if (isset($existingPrices[$key])) {
                 $precoExistente = $existingPrices[$key];
                 if (abs($precoExistente->preco - $dados['preco']) <= 0.01) {
+                    // Adicionar aos conflitos se o preço for muito semelhante
                     $conflitos[] = [
                         'produto_id' => $dados['produto_id'],
                         'message' => 'Preço semelhante já existe',
@@ -125,30 +140,34 @@ class PrecoController extends Controller
                     continue;
                 }
             }
-
-            $novosPrecos[] = $dados;
+            // Adicionar aos preços finais se for válido
+            $finalPrecos[] = $dados;
         }
 
-        if (!empty($novosPrecos)) {
+        // Inserir novos preços se houver algum válido
+        if (!empty($finalPrecos)) {
             try {
-                DB::transaction(function () use ($novosPrecos) {
-                    Preco::insert($novosPrecos);
+                // Transação para garantir atomicidade
+                DB::transaction(function () use ($finalPrecos) {
+                    Preco::insert($finalPrecos);
                 });
-                $resultados = $novosPrecos;
+                $resultados = $finalPrecos;
 
                 // Limpa o cache para os preços que foram inseridos
-                foreach ($novosPrecos as $dados) {
+                foreach ($finalPrecos as $dados) {
                     $cacheKey = "preco_atual_{$dados['farmacia_id']}_{$dados['produto_id']}";
                     Cache::forget($cacheKey);
                 }
 
             } catch (\Exception $e) {
+                // Capturar erros durante a inserção em massa
                 $conflitos[] = [
                     'message' => 'Erro ao inserir preços em massa: ' . $e->getMessage(),
                 ];
             }
         }
 
+        // Retorna o resultado como resposta JSON
         return response()->json([
             'success' => true,
             'resultados' => $resultados,
