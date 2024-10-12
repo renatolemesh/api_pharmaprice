@@ -58,4 +58,5 @@ class InformacoesProdutoController extends Controller
 
         return response()->json($informacoes_produto);
     }
+    
 }

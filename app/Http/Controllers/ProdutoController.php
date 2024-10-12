@@ -32,4 +32,12 @@ class ProdutoController extends Controller
 
         return response()->json($produto, 201);
     }
+
+    public function indexAll()
+    {
+        // Busca todas as informações dos produtos
+        $produtos = Produto::all();
+
+        return response()->json($produtos);
+    }
 }

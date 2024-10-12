@@ -19,6 +19,7 @@ Route::get('/precos/historico', [HistoricoController::class, 'historico']);
 // Novas rotas
 Route::post('/produtos', [ProdutoController::class, 'store']);
 Route::get('/produtos', [ProdutoController::class, 'index']);
+Route::get('/produtos/all', [ProdutoController::class, 'indexAll']);
 Route::post('/informacoes_produtos', [InformacoesProdutoController::class, 'store']);
 Route::get('/informacoes_produtos', [InformacoesProdutoController::class, 'index']);
 Route::get('/informacoes_produtos/all', [InformacoesProdutoController::class, 'indexAll']);
@@ -28,4 +29,5 @@ Route::delete('/links', [LinkController::class, 'destroy']);
 Route::get('/links', [LinkController::class, 'index']);
 Route::post('/links', [LinkController::class, 'store']);
 Route::get('/descricoes', [DescricaoController::class, 'index']);
+
 
