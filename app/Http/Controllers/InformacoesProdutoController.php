@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\InformacoesProduto;
+use Illuminate\Validation\Rule;
 
 class InformacoesProdutoController extends Controller
 {
@@ -42,7 +43,13 @@ class InformacoesProdutoController extends Controller
         $validatedData = $request->validate([
             'farmacia_id' => 'required|integer|exists:farmacias,farmacia_id',
             'produto_id' => 'required|numeric|exists:produtos,produto_id',
-            'link' => 'required|string|unique:informacoes_produtos,link',
+            'link' => [
+                'required',
+                'string',
+                Rule::unique('informacoes_produtos')->where(function ($query) use ($request) {
+                    return $query->where('farmacia_id', $request->farmacia_id);
+                }),
+            ],
             'sku' => 'nullable|numeric',
         ]);
 
