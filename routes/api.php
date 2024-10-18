@@ -15,8 +15,6 @@ Route::get('/user', function (Request $request) {
 
 Route::get('/precos', [PrecoController::class, 'consultar']);
 Route::get('/precos/historico', [HistoricoController::class, 'historico']);
-
-// Novas rotas
 Route::post('/produtos', [ProdutoController::class, 'store']);
 Route::get('/produtos', [ProdutoController::class, 'index']);
 Route::get('/produtos/all', [ProdutoController::class, 'indexAll']);

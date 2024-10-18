@@ -18,7 +18,7 @@ return new class extends Migration
             $table->string('link', 255)->nullable();
             $table->string('sku', 50)->nullable();
             $table->timestamps();
-            $table->unique(['farmacia_id', 'link']);
+            $table->unique(['farmacia_id', 'produto_id']); 
             $table->foreign('farmacia_id')->references('farmacia_id')->on('farmacias')->onDelete('cascade');
             $table->foreign('produto_id')->references('produto_id')->on('produtos')->onDelete('cascade');
         });

@@ -38,11 +38,24 @@ class PrecoController extends Controller
             $farmacia = str_replace('+', ' ', $farmacia);
             $farmaciasIds = explode(' ', $farmacia);
         }
-       
+
         $query = DB::table('precos')
             ->join('produtos', 'precos.produto_id', '=', 'produtos.produto_id')
             ->join('farmacias', 'precos.farmacia_id', '=', 'farmacias.farmacia_id')
-            ->select('produtos.descricao', 'produtos.EAN', 'farmacias.nome_farmacia', 'precos.preco', 'precos.data', 'produtos.produto_id');    
+            ->leftJoin('informacoes_produtos', function ($join) {
+                $join->on('produtos.produto_id', '=', 'informacoes_produtos.produto_id')
+                    ->on('precos.farmacia_id', '=', 'informacoes_produtos.farmacia_id');
+            })
+            ->select(
+                'produtos.descricao',
+                'produtos.EAN',
+                'farmacias.nome_farmacia',
+                'precos.preco',
+                'precos.data',
+                'produtos.produto_id',
+                DB::raw('MAX(informacoes_produtos.link) as link') // Seleciona o link máximo
+            )
+            ->groupBy('produtos.produto_id', 'farmacias.farmacia_id', 'produtos.descricao', 'produtos.EAN', 'precos.preco', 'precos.data');
 
         if ($ean) {
             $query->where('produtos.EAN', $ean);
@@ -56,8 +69,8 @@ class PrecoController extends Controller
 
         $query->whereIn('precos.preco_id', function ($subquery) {
             $subquery->select(DB::raw('MAX(preco_id)'))
-                     ->from('precos')
-                     ->groupBy('produto_id', 'farmacia_id');
+                    ->from('precos')
+                    ->groupBy('produto_id', 'farmacia_id');
         });
 
         $query->orderBy('precos.preco', 'asc');
@@ -83,7 +96,6 @@ class PrecoController extends Controller
                 'total' => $resultados->total()
             ]);
         }
-        
     }
 
     // Método para inserir preço

@@ -49,8 +49,12 @@ class InformacoesProdutoController extends Controller
                 Rule::unique('informacoes_produtos')->where(function ($query) use ($request) {
                     return $query->where('farmacia_id', $request->farmacia_id);
                 }),
-            ],
-            'sku' => 'nullable|numeric',
+            ],  
+            'sku' => 'required|numeric',
+            Rule::unique('informacoes_produtos')->where(function ($query) use ($request) {
+                return $query->where('farmacia_id', $request->farmacia_id)
+                             ->where('produto_id', $request->produto_id);
+            }),
         ]);
 
         $informacaoProduto = InformacoesProduto::create($validatedData);
