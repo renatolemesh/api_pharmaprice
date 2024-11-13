@@ -36,6 +36,9 @@ RUN pecl install -o -f redis \
 # Set working directory
 WORKDIR /var/www
 
+# Ensure the working directory has the correct permissions
+RUN chown -R $user:$user /var/www
+
 # Copy custom configurations PHP
 COPY docker/php/custom.ini /usr/local/etc/php/conf.d/custom.ini
 
