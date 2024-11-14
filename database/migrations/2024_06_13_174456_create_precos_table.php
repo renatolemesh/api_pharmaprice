@@ -15,7 +15,7 @@ return new class extends Migration
             $table->id('preco_id');
             $table->unsignedBigInteger('farmacia_id')->nullable();
             $table->unsignedBigInteger('produto_id')->nullable();
-            $table->decimal('preco', 6, 2)->nullable();
+            $table->decimal('preco', 8, 2)->nullable();
             $table->date('data')->nullable();
             $table->foreign('farmacia_id')->references('farmacia_id')->on('farmacias')->onDelete('cascade');
             $table->foreign('produto_id')->references('produto_id')->on('produtos')->onDelete('cascade');
