@@ -17,7 +17,9 @@ services:
 
     # nginx
     nginx:
-        image: nginx:alpine
+        build:
+            context: .
+            dockerfile: docker/nginx/Dockerfile # Caminho para o Dockerfile customizado
         restart: unless-stopped
         ports:
             - "8002:80"
