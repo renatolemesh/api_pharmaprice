@@ -28,6 +28,8 @@ services:
             - ./:/var/www
             - ./docker/nginx/:/etc/nginx/conf.d/
             - ./ssl:/etc/nginx/ssl
+            - ./letsencrypt:/etc/letsencrypt  # Volume para persistir os certificados
+            - ./certbot:/var/www/certbot  # Volume para armazenar arquivos de validação
         networks:
             - laravel
 
