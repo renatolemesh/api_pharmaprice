@@ -16,7 +16,6 @@ return new class extends Migration
             $table->string('descricao', 255)->nullable();
             $table->string('EAN', 15)->unique()->nullable();
             $table->string('laboratorio', 50)->nullable();
-            $table->timestamps();
         });
     }
 

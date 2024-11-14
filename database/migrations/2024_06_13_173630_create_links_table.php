@@ -14,7 +14,6 @@ return new class extends Migration
         Schema::create('links', function (Blueprint $table) {
             $table->unsignedBigInteger('farmacia_id')->nullable();
             $table->string('link', 255)->nullable();
-            $table->timestamps();
             $table->foreign('farmacia_id')->references('farmacia_id')->on('farmacias')->onDelete('cascade');
         });
     }
