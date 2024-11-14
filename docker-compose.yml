@@ -54,6 +54,7 @@ services:
         environment:
             PMA_HOST: db
             PMA_PORT: 3306
+            UPLOAD_LIMIT: 100M
             MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
         networks:
             - laravel
