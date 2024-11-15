@@ -20,7 +20,6 @@ services:
         image: nginx:alpine
         restart: unless-stopped
         ports:
-            - "8002:80"
             - "443:443"
         volumes:
             - ./:/var/www
