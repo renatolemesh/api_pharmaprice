@@ -1,1 +1,4 @@
-.
+# Ignore todos os arquivos e subpastas na pasta
+*
+# Exceto este arquivo
+!.gitignore
