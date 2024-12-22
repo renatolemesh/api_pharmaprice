@@ -53,7 +53,7 @@ class PrecoController extends Controller
                 'precos.preco',
                 'precos.data',
                 'produtos.produto_id',
-                DB::raw('MAX(informacoes_produtos.link) as link') // Seleciona o link máximo
+                DB::raw('MAX(informacoes_produtos.link) as link')
             )
             ->groupBy('produtos.produto_id', 'farmacias.farmacia_id', 'produtos.descricao', 'produtos.EAN', 'precos.preco', 'precos.data');
 
@@ -75,26 +75,45 @@ class PrecoController extends Controller
 
         $query->orderBy('precos.preco', 'asc');
 
-        if ($noPaginate) {
-            $resultados = $query->get();
-        } else {
-            $resultados = $query->paginate(100);
-        }
+        try {
+            if ($noPaginate) {
+                // Use chunk para processar grandes conjuntos de dados
+                $resultados = [];
+                $query->chunk(1000, function($records) use (&$resultados) {
+                    foreach ($records as $record) {
+                        $resultados[] = $record;
+                    }
+                });
 
-        if ($resultados->isEmpty()) {
-            return response()->json(['message' => 'Nenhum resultado encontrado.'], 404);
-        }
+                if (empty($resultados)) {
+                    return response()->json(['message' => 'Nenhum resultado encontrado.'], 404);
+                }
 
-        if ($noPaginate) {
-            return response()->json(['data' => $resultados]);
-        } else {
+                return response()->json(['data' => $resultados]);
+            } else {
+                $resultados = $query->paginate(100);
+
+                if ($resultados->isEmpty()) {
+                    return response()->json(['message' => 'Nenhum resultado encontrado.'], 404);
+                }
+
+                return response()->json([
+                    'data' => $resultados->items(),
+                    'current_page' => $resultados->currentPage(),
+                    'last_page' => $resultados->lastPage(),
+                    'per_page' => $resultados->perPage(),
+                    'total' => $resultados->total()
+                ]);
+            }
+        } catch (\Exception $e) {
+            Log::error('Erro na consulta: ' . $e->getMessage());
+            Log::error('SQL: ' . $query->toSql());
+            Log::error('Bindings: ' . json_encode($query->getBindings()));
+
             return response()->json([
-                'data' => $resultados->items(),
-                'current_page' => $resultados->currentPage(),
-                'last_page' => $resultados->lastPage(),
-                'per_page' => $resultados->perPage(),
-                'total' => $resultados->total()
-            ]);
+                'error' => 'Erro ao processar a consulta',
+                'message' => $e->getMessage()
+            ], 500);
         }
     }
 
@@ -130,8 +149,8 @@ class PrecoController extends Controller
             ->whereIn('farmacia_id', array_column($novosPrecos, 'farmacia_id'))
             ->whereIn('produto_id', array_column($novosPrecos, 'produto_id'))
             ->whereRaw('(farmacia_id, produto_id, data) IN (
-                SELECT farmacia_id, produto_id, MAX(data) 
-                FROM precos 
+                SELECT farmacia_id, produto_id, MAX(data)
+                FROM precos
                 GROUP BY farmacia_id, produto_id)')
             ->get()
             ->keyBy(function ($item) {
