@@ -15,7 +15,7 @@ services:
         networks:
             - laravel
         environment:
-            PHP_MEMORY_LIMIT: 4095M
+            PHP_MEMORY_LIMIT: 8192M
 
     # nginx
     nginx:
