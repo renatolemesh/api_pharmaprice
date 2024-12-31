@@ -74,7 +74,7 @@ class PrecoController extends Controller
             if ($noPaginate) {
                 try {
                     Log::info('Memory usage before query: ' . memory_get_usage());
-                    $resultados = $query->limit(500000)->get();
+                    $resultados = $query->limit(5000000)->get();
                     Log::info('Memory usage after query: ' . memory_get_usage());
                     return response()->json($resultados);
                 } catch (\PDOException $e) {
