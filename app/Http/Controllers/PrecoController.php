@@ -68,7 +68,7 @@ class PrecoController extends Controller
         } elseif ($descricao) {
             $query->where('produtos.descricao', 'like', '%' . $descricao . '%');
         } elseif ($farmacia) {
-            $query->where('farmacias.id', $farmacia);
+            $query->where('farmacias.farmacia_id', $farmacia);
         }
 
         $query->orderBy('latest_precos.preco', 'asc');
