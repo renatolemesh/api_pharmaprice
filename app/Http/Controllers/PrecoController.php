@@ -71,8 +71,14 @@ class PrecoController extends Controller
         $query->orderBy('latest_precos.preco', 'asc');
         try {
             if ($noPaginate) {
-                $resultados = $query->get();
-                return response()->json(['data' => $resultados]);
+                try {
+                    $resultados = $query->get();
+                    return response()->json(['data' => $resultados]);
+                } catch (\PDOException $e) {
+                    dd($e->getMessage());
+                } catch (\Exception $e) {
+                    dd($e->getMessage());
+                }
             }
 
             // Manual pagination
