@@ -14,6 +14,8 @@ services:
             - redis
         networks:
             - laravel
+        environment:
+            PHP_MEMORY_LIMIT: 4095M
 
     # nginx
     nginx:
