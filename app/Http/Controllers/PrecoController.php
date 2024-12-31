@@ -14,10 +14,13 @@ class PrecoController extends Controller
 {
     public function consultar(Request $request)
     {
+        DB::enableQueryLog();
         $validator = Validator::make($request->all(), [
             'ean' => 'nullable|string|max:15',
             'descricao' => 'nullable|string|max:255',
-            'farmacia' => 'nullable|string'
+            'farmacia' => 'nullable|string',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:1|max:100'
         ]);
 
         if ($validator->fails()) {
@@ -28,34 +31,36 @@ class PrecoController extends Controller
         $descricao = $request->query('descricao');
         $farmacia = $request->query('farmacia');
         $noPaginate = $request->query->has('no_paginate');
+        $page = $request->query('page', 1);
+        $perPage = $request->query('per_page', 100);
 
-        if ($descricao) {
-            $descricao = preg_replace('/\s+/', ' ', trim($descricao));
-        }
-
-        $farmaciasIds = [];
-        if ($farmacia) {
-            $farmacia = str_replace('+', ' ', $farmacia);
-            $farmaciasIds = explode(' ', $farmacia);
-        }
-
-        $query = DB::table('precos')
-            ->join('produtos', 'precos.produto_id', '=', 'produtos.produto_id')
-            ->join('farmacias', 'precos.farmacia_id', '=', 'farmacias.farmacia_id')
+        $query = DB::query()
+            ->fromSub(function ($query) {
+                $query->select('p.*')
+                    ->from('precos as p')
+                    ->join(DB::raw('(
+                        SELECT produto_id, farmacia_id, MAX(preco_id) as max_preco_id
+                        FROM precos
+                        GROUP BY produto_id, farmacia_id
+                    ) as latest'), function($join) {
+                        $join->on('p.preco_id', '=', 'latest.max_preco_id');
+                    });
+            }, 'latest_precos')
+            ->join('produtos', 'latest_precos.produto_id', '=', 'produtos.produto_id')
+            ->join('farmacias', 'latest_precos.farmacia_id', '=', 'farmacias.farmacia_id')
             ->leftJoin('informacoes_produtos', function ($join) {
                 $join->on('produtos.produto_id', '=', 'informacoes_produtos.produto_id')
-                    ->on('precos.farmacia_id', '=', 'informacoes_produtos.farmacia_id');
+                    ->on('latest_precos.farmacia_id', '=', 'informacoes_produtos.farmacia_id');
             })
-            ->select(
+            ->select([
                 'produtos.descricao',
                 'produtos.EAN',
                 'farmacias.nome_farmacia',
-                'precos.preco',
-                'precos.data',
+                'latest_precos.preco',
+                'latest_precos.data',
                 'produtos.produto_id',
-                DB::raw('MAX(informacoes_produtos.link) as link')
-            )
-            ->groupBy('produtos.produto_id', 'farmacias.farmacia_id', 'produtos.descricao', 'produtos.EAN', 'precos.preco', 'precos.data');
+                'informacoes_produtos.link'
+            ]);
 
         if ($ean) {
             $query->where('produtos.EAN', $ean);
@@ -63,59 +68,35 @@ class PrecoController extends Controller
             $query->where('produtos.descricao', 'like', '%' . $descricao . '%');
         }
 
-        if (!empty($farmaciasIds)) {
-            $query->whereIn('precos.farmacia_id', $farmaciasIds);
-        }
-
-        $query->whereIn('precos.preco_id', function ($subquery) {
-            $subquery->select(DB::raw('MAX(preco_id)'))
-                    ->from('precos')
-                    ->groupBy('produto_id', 'farmacia_id');
-        });
-
-        $query->orderBy('precos.preco', 'asc');
-
+        $query->orderBy('latest_precos.preco', 'asc');
         try {
             if ($noPaginate) {
-                // Use chunk para processar grandes conjuntos de dados
-                $resultados = [];
-                $query->chunk(1000, function($records) use (&$resultados) {
-                    foreach ($records as $record) {
-                        $resultados[] = $record;
-                    }
-                });
-
-                if (empty($resultados)) {
-                    return response()->json(['message' => 'Nenhum resultado encontrado.'], 404);
-                }
-
+                $resultados = $query->get();
                 return response()->json(['data' => $resultados]);
-            } else {
-                $resultados = $query->paginate(100);
-
-                if ($resultados->isEmpty()) {
-                    return response()->json(['message' => 'Nenhum resultado encontrado.'], 404);
-                }
-
-                return response()->json([
-                    'data' => $resultados->items(),
-                    'current_page' => $resultados->currentPage(),
-                    'last_page' => $resultados->lastPage(),
-                    'per_page' => $resultados->perPage(),
-                    'total' => $resultados->total()
-                ]);
             }
-        } catch (\Exception $e) {
-            Log::error('Erro na consulta: ' . $e->getMessage());
-            Log::error('SQL: ' . $query->toSql());
-            Log::error('Bindings: ' . json_encode($query->getBindings()));
+
+            // Manual pagination
+            $total = DB::table(DB::raw("({$query->toSql()}) as sub"))
+                ->mergeBindings($query)
+                ->count(DB::raw('1'));
+
+            $offset = ($page - 1) * $perPage;
+            $resultados = $query->skip($offset)->take($perPage)->get();
 
             return response()->json([
-                'error' => 'Erro ao processar a consulta',
-                'message' => $e->getMessage()
-            ], 500);
+                'data' => $resultados,
+                'current_page' => $page,
+                'last_page' => ceil($total / $perPage),
+                'per_page' => $perPage,
+                'total' => $total
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Erro na execução da consulta', ['message' => $e->getMessage()]);
+            return response()->json(['error' => 'Erro interno do servidor'], 500);
         }
     }
+
 
     // Método para inserir preço
     public function store(Request $request)
