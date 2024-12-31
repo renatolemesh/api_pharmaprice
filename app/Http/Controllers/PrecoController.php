@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\Preco;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
@@ -73,11 +74,13 @@ class PrecoController extends Controller
             if ($noPaginate) {
                 try {
                     $resultados = $query->get();
-                    return response()->json(['data' => $resultados]);
+                    return response()->json($resultados);
                 } catch (\PDOException $e) {
-                    dd($e->getMessage());
+                    Log::error('Erro PDO:', ['message' => $e->getMessage()]);
+                    return response()->json(['error' => 'Erro de conexão'], 500);
                 } catch (\Exception $e) {
-                    dd($e->getMessage());
+                    Log::error('Erro geral:', ['message' => $e->getMessage()]);
+                    return response()->json(['error' => 'Erro interno'], 500);
                 }
             }
 
