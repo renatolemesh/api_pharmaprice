@@ -68,7 +68,7 @@ class PrecoController extends Controller
         } elseif ($descricao) {
             $query->where('produtos.descricao', 'like', '%' . $descricao . '%');
         }
-
+        dd($query->toSql());
         $query->orderBy('latest_precos.preco', 'asc');
         try {
             if ($noPaginate) {
