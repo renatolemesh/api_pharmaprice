@@ -78,7 +78,7 @@ class PrecoController extends Controller
                     Log::info('Memory usage before query: ' . memory_get_usage());
                     $resultados = $query->limit(5000000)->get();
                     Log::info('Memory usage after query: ' . memory_get_usage());
-                    return response()->json($resultados);
+                    return response()->json(['data' => $resultados]);
                 } catch (\PDOException $e) {
                     Log::error('Erro PDO:', ['message' => $e->getMessage()]);
                     return response()->json(['error' => 'Erro de conexão'], 500);
