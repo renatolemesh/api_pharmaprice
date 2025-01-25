@@ -70,7 +70,7 @@ class HistoricoController extends Controller
         }
 
         if ($resultados->isEmpty()) {
-            return response()->json(['message' => 'Nenhum resultado encontrado.'], 404);
+            return response()->json(['message' => 'Nenhum resultado encontrado.'], 200);
         }
 
         $historico = [];
