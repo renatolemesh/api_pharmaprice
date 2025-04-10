@@ -56,6 +56,7 @@ class PrecoController extends Controller
             ->select([
                 'produtos.descricao',
                 'produtos.EAN',
+                'produtos.laboratorio',
                 'farmacias.nome_farmacia',
                 'latest_precos.preco',
                 'latest_precos.data',
