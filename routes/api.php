@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DescricaoController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
@@ -37,6 +38,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/users/{user}', [AuthController::class, 'destroy']);
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/user', [AuthController::class, 'show']);
+});
+
+Route::prefix('dashboard')->group(function () {
+    Route::get('/statistics', [DashboardController::class, 'getStatistics']);
+    Route::get('/trends', [DashboardController::class, 'getPriceTrends']);
+    Route::get('/top-changes', [DashboardController::class, 'getTopPriceChanges']);
+    Route::get('/pharmacy-stats', [DashboardController::class, 'getPharmacyStats']);
+    Route::get('/summary', [DashboardController::class, 'getSummary']); // Optional: all-in-one
+    Route::post('/cache/clear', [DashboardController::class, 'clearCache']);
 });
 
 
