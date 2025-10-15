@@ -145,9 +145,10 @@ class DashboardController extends Controller
 
         $cacheKey = "top_changes_{$farmaciaId}_{$limit}_{$type}";
 
+
         return Cache::remember($cacheKey, 300, function () use ($farmaciaId, $limit, $type) {
             $lastWeek = Carbon::now()->subWeek()->toDateString();
-
+            $minValue = 5;
             // Using window functions for better performance (MySQL 8.0+)
             $subquery = DB::table('precos as p1')
                 ->join('produtos', 'p1.produto_id', '=', 'produtos.produto_id')
@@ -180,7 +181,7 @@ class DashboardController extends Controller
                     data_alteracao
                 ")
                 ->whereNotNull('preco_anterior')
-                ->where('preco_anterior', '>', 0)
+                ->where('preco_anterior', '>', $minValue)
                 // Filter out changes greater than 500% (likely errors)
                 ->whereRaw('ABS((preco_atual - preco_anterior) / preco_anterior * 100) <= 500');
 
