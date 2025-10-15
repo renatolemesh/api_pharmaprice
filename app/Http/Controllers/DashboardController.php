@@ -95,39 +95,40 @@ class DashboardController extends Controller
     public function getPriceTrends(Request $request)
     {
         $farmaciaId = $request->query('farmacia_id');
-        $days = $request->query('days', 30); // Padrão 30 dias
+        $days = $request->query('days', 30);
 
         $cacheKey = $farmaciaId
             ? "price_trends_{$farmaciaId}_{$days}"
             : "price_trends_global_{$days}";
 
         return Cache::remember($cacheKey, 600, function () use ($farmaciaId, $days) {
-            $startDate = Carbon::now()->subDays($days);
+            $startDate = Carbon::now()->subDays($days)->toDateString();
 
-            $trends = DB::table('precos as p1')
-                ->join('precos as p2', function($join) {
-                    $join->on('p1.produto_id', '=', 'p2.produto_id')
-                         ->on('p1.farmacia_id', '=', 'p2.farmacia_id');
-                })
-                ->when($farmaciaId, function($q) use ($farmaciaId) {
-                    return $q->where('p1.farmacia_id', $farmaciaId);
-                })
-                ->where('p1.data', '>=', $startDate)
-                ->whereRaw('p2.data = (
-                    SELECT MAX(data)
-                    FROM precos
-                    WHERE produto_id = p1.produto_id
-                    AND farmacia_id = p1.farmacia_id
-                    AND data < p1.data
-                )')
-                ->selectRaw("
+            // Use window functions for better performance (MySQL 8.0+)
+            $trends = DB::table(DB::raw('(
+                SELECT
                     DATE(p1.data) as data,
-                    SUM(CASE WHEN p1.preco > p2.preco THEN 1 ELSE 0 END) as aumentos,
-                    SUM(CASE WHEN p1.preco < p2.preco THEN 1 ELSE 0 END) as reducoes
-                ")
-                ->groupBy('data')
-                ->orderBy('data')
-                ->get();
+                    p1.preco as preco_atual,
+                    p1.produto_id,
+                    p1.farmacia_id,
+                    LAG(p1.preco) OVER (
+                        PARTITION BY p1.produto_id, p1.farmacia_id
+                        ORDER BY p1.data
+                    ) as preco_anterior
+                FROM precos p1
+                WHERE p1.data >= ?
+                ' . ($farmaciaId ? 'AND p1.farmacia_id = ?' : '') . '
+            ) as price_changes'))
+            ->selectRaw('
+                data,
+                SUM(CASE WHEN preco_atual > preco_anterior THEN 1 ELSE 0 END) as aumentos,
+                SUM(CASE WHEN preco_atual < preco_anterior THEN 1 ELSE 0 END) as reducoes
+            ')
+            ->setBindings($farmaciaId ? [$startDate, $farmaciaId] : [$startDate])
+            ->whereNotNull('preco_anterior')
+            ->groupBy('data')
+            ->orderBy('data')
+            ->get();
 
             return response()->json($trends);
         });
@@ -145,42 +146,52 @@ class DashboardController extends Controller
         $cacheKey = "top_changes_{$farmaciaId}_{$limit}_{$type}";
 
         return Cache::remember($cacheKey, 300, function () use ($farmaciaId, $limit, $type) {
-            $query = DB::table('precos as p1')
-                ->join('precos as p2', function($join) {
-                    $join->on('p1.produto_id', '=', 'p2.produto_id')
-                         ->on('p1.farmacia_id', '=', 'p2.farmacia_id');
-                })
+            $lastWeek = Carbon::now()->subWeek()->toDateString();
+
+            // Using window functions for better performance (MySQL 8.0+)
+            $subquery = DB::table('precos as p1')
                 ->join('produtos', 'p1.produto_id', '=', 'produtos.produto_id')
                 ->join('farmacias', 'p1.farmacia_id', '=', 'farmacias.farmacia_id')
-                ->when($farmaciaId, function($q) use ($farmaciaId) {
-                    return $q->where('p1.farmacia_id', $farmaciaId);
-                })
-                ->where('p1.data', '>=', Carbon::now()->subWeek())
-                ->whereRaw('p2.data = (
-                    SELECT MAX(data)
-                    FROM precos
-                    WHERE produto_id = p1.produto_id
-                    AND farmacia_id = p1.farmacia_id
-                    AND data < p1.data
-                )')
                 ->selectRaw("
                     produtos.descricao,
                     produtos.EAN,
                     farmacias.nome_farmacia,
-                    p2.preco as preco_anterior,
                     p1.preco as preco_atual,
-                    ((p1.preco - p2.preco) / p2.preco * 100) as variacao_percentual,
-                    p1.data as data_alteracao
-                ");
+                    p1.data as data_alteracao,
+                    p1.produto_id,
+                    p1.farmacia_id,
+                    LAG(p1.preco) OVER (
+                        PARTITION BY p1.produto_id, p1.farmacia_id
+                        ORDER BY p1.data
+                    ) as preco_anterior
+                ")
+                ->when($farmaciaId, fn($q) => $q->where('p1.farmacia_id', $farmaciaId))
+                ->where('p1.data', '>=', $lastWeek);
+
+            $query = DB::table(DB::raw("({$subquery->toSql()}) as price_data"))
+                ->mergeBindings($subquery)
+                ->selectRaw("
+                    descricao,
+                    EAN,
+                    nome_farmacia,
+                    preco_anterior,
+                    preco_atual,
+                    ((preco_atual - preco_anterior) / NULLIF(preco_anterior, 0) * 100) as variacao_percentual,
+                    data_alteracao
+                ")
+                ->whereNotNull('preco_anterior')
+                ->where('preco_anterior', '>', 0)
+                // Filter out changes greater than 500% (likely errors)
+                ->whereRaw('ABS((preco_atual - preco_anterior) / preco_anterior * 100) <= 500');
 
             if ($type === 'increase') {
-                $query->whereRaw('p1.preco > p2.preco')
-                      ->orderByRaw('((p1.preco - p2.preco) / p2.preco) DESC');
+                $query->whereRaw('preco_atual > preco_anterior')
+                    ->orderByRaw('((preco_atual - preco_anterior) / preco_anterior) DESC');
             } elseif ($type === 'decrease') {
-                $query->whereRaw('p1.preco < p2.preco')
-                      ->orderByRaw('((p1.preco - p2.preco) / p2.preco) ASC');
+                $query->whereRaw('preco_atual < preco_anterior')
+                    ->orderByRaw('((preco_atual - preco_anterior) / preco_anterior) ASC');
             } else {
-                $query->orderByRaw('ABS((p1.preco - p2.preco) / p2.preco) DESC');
+                $query->orderByRaw('ABS((preco_atual - preco_anterior) / preco_anterior) DESC');
             }
 
             $results = $query->limit($limit)->get();
@@ -197,18 +208,20 @@ class DashboardController extends Controller
         $cacheKey = "pharmacy_stats";
 
         return Cache::remember($cacheKey, 600, function () {
+            $lastWeek = Carbon::now()->subWeek()->toDateString();
+
             $stats = DB::table('farmacias')
-                ->leftJoin('precos', function($join) {
+                ->leftJoin('precos', function($join) use ($lastWeek) {
                     $join->on('farmacias.farmacia_id', '=', 'precos.farmacia_id')
-                         ->where('precos.data', '>=', Carbon::now()->subWeek());
+                        ->where('precos.data', '>=', $lastWeek);
                 })
-                ->selectRaw("
-                    farmacias.farmacia_id,
-                    farmacias.nome_farmacia,
-                    COUNT(DISTINCT precos.produto_id) as produtos_atualizados
-                ")
+                ->select([
+                    'farmacias.farmacia_id',
+                    'farmacias.nome_farmacia',
+                    DB::raw('COUNT(DISTINCT precos.produto_id) as produtos_atualizados')
+                ])
                 ->groupBy('farmacias.farmacia_id', 'farmacias.nome_farmacia')
-                ->orderBy('produtos_atualizados', 'desc')
+                ->orderByDesc('produtos_atualizados')
                 ->get();
 
             return response()->json($stats);
