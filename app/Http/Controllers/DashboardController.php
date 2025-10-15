@@ -200,6 +200,8 @@ class DashboardController extends Controller
         });
     }
 
+
+
     /**
      * Get pharmacy update statistics
      */
