@@ -24,111 +24,66 @@ class DashboardController extends Controller
             : "dashboard_stats_global";
 
         return Cache::remember($cacheKey, 300, function () use ($farmaciaId) {
-            $baseQuery = DB::table('precos')
-                ->join('produtos', 'precos.produto_id', '=', 'produtos.produto_id');
+            $lastWeek = Carbon::now()->subWeek()->toDateString();
 
-            if ($farmaciaId) {
-                $baseQuery->where('precos.farmacia_id', $farmaciaId);
-            }
+            // Create a CTE with latest previous prices
+            $latestPricesSubquery = DB::table('precos as p_inner')
+                ->select('p_inner.produto_id', 'p_inner.farmacia_id', DB::raw('MAX(p_inner.data) as max_data'))
+                ->when($farmaciaId, fn($q) => $q->where('p_inner.farmacia_id', $farmaciaId))
+                ->where('p_inner.data', '<', DB::raw('p_outer.data'))
+                ->whereColumn('p_inner.produto_id', 'p_outer.produto_id')
+                ->whereColumn('p_inner.farmacia_id', 'p_outer.farmacia_id')
+                ->groupBy('p_inner.produto_id', 'p_inner.farmacia_id')
+                ->limit(1);
 
-            // Data de uma semana atrás
-            $lastWeek = Carbon::now()->subWeek();
-
-            // Produtos atualizados na última semana
-            $produtosAtualizados = (clone $baseQuery)
-                ->where('precos.data', '>=', $lastWeek)
-                ->distinct('precos.produto_id')
-                ->count('precos.produto_id');
-
-            // Variação média de preços
-            $variacaoMedia = DB::table('precos as p1')
+            // Single query for price movements and variations
+            $priceAnalysis = DB::table('precos as p1')
+                ->select([
+                    DB::raw('COUNT(DISTINCT p1.produto_id) as produtos_atualizados'),
+                    DB::raw('AVG(((p1.preco - p2.preco) / NULLIF(p2.preco, 0)) * 100) as variacao_media'),
+                    DB::raw('SUM(CASE WHEN p1.preco > p2.preco THEN 1 ELSE 0 END) as aumentos'),
+                    DB::raw('SUM(CASE WHEN p1.preco < p2.preco THEN 1 ELSE 0 END) as reducoes'),
+                    DB::raw('AVG(DATEDIFF(p1.data, p2.data)) as tempo_medio')
+                ])
                 ->join('precos as p2', function($join) {
                     $join->on('p1.produto_id', '=', 'p2.produto_id')
-                         ->on('p1.farmacia_id', '=', 'p2.farmacia_id')
-                         ->whereRaw('p1.data > p2.data');
+                        ->on('p1.farmacia_id', '=', 'p2.farmacia_id')
+                        ->on('p2.data', '=', DB::raw('(
+                            SELECT MAX(p3.data)
+                            FROM precos p3
+                            WHERE p3.produto_id = p1.produto_id
+                            AND p3.farmacia_id = p1.farmacia_id
+                            AND p3.data < p1.data
+                        )'));
                 })
-                ->when($farmaciaId, function($q) use ($farmaciaId) {
-                    return $q->where('p1.farmacia_id', $farmaciaId);
-                })
+                ->when($farmaciaId, fn($q) => $q->where('p1.farmacia_id', $farmaciaId))
                 ->where('p1.data', '>=', $lastWeek)
-                ->whereRaw('p2.data = (
-                    SELECT MAX(data)
-                    FROM precos
-                    WHERE produto_id = p1.produto_id
-                    AND farmacia_id = p1.farmacia_id
-                    AND data < p1.data
-                )')
-                ->selectRaw('AVG(((p1.preco - p2.preco) / p2.preco) * 100) as variacao')
-                ->value('variacao') ?? 0;
+                ->first();
 
-            // Total de produtos
+            // Separate simpler queries
             $totalProdutos = DB::table('produtos')
                 ->when($farmaciaId, function($q) use ($farmaciaId) {
                     return $q->whereExists(function($query) use ($farmaciaId) {
                         $query->select(DB::raw(1))
-                              ->from('precos')
-                              ->whereColumn('precos.produto_id', 'produtos.produto_id')
-                              ->where('precos.farmacia_id', $farmaciaId);
+                            ->from('precos')
+                            ->whereColumn('precos.produto_id', 'produtos.produto_id')
+                            ->where('precos.farmacia_id', $farmaciaId)
+                            ->limit(1);
                     });
                 })
                 ->count();
 
-            // Aumentos e reduções de preço
-            $movimentos = DB::table('precos as p1')
-                ->join('precos as p2', function($join) {
-                    $join->on('p1.produto_id', '=', 'p2.produto_id')
-                         ->on('p1.farmacia_id', '=', 'p2.farmacia_id');
-                })
-                ->when($farmaciaId, function($q) use ($farmaciaId) {
-                    return $q->where('p1.farmacia_id', $farmaciaId);
-                })
-                ->where('p1.data', '>=', $lastWeek)
-                ->whereRaw('p2.data = (
-                    SELECT MAX(data)
-                    FROM precos
-                    WHERE produto_id = p1.produto_id
-                    AND farmacia_id = p1.farmacia_id
-                    AND data < p1.data
-                )')
-                ->selectRaw('
-                    SUM(CASE WHEN p1.preco > p2.preco THEN 1 ELSE 0 END) as aumentos,
-                    SUM(CASE WHEN p1.preco < p2.preco THEN 1 ELSE 0 END) as reducoes
-                ')
-                ->first();
-
-            // Tempo médio para alteração
-            $tempoMedio = DB::table('precos as p1')
-                ->join('precos as p2', function($join) {
-                    $join->on('p1.produto_id', '=', 'p2.produto_id')
-                         ->on('p1.farmacia_id', '=', 'p2.farmacia_id');
-                })
-                ->when($farmaciaId, function($q) use ($farmaciaId) {
-                    return $q->where('p1.farmacia_id', $farmaciaId);
-                })
-                ->whereRaw('p2.data = (
-                    SELECT MAX(data)
-                    FROM precos
-                    WHERE produto_id = p1.produto_id
-                    AND farmacia_id = p1.farmacia_id
-                    AND data < p1.data
-                )')
-                ->selectRaw('AVG(DATEDIFF(p1.data, p2.data)) as media_dias')
-                ->value('media_dias') ?? 0;
-
-            // Total de preços armazenados
             $totalPrecos = DB::table('precos')
-                ->when($farmaciaId, function($q) use ($farmaciaId) {
-                    return $q->where('farmacia_id', $farmaciaId);
-                })
+                ->when($farmaciaId, fn($q) => $q->where('farmacia_id', $farmaciaId))
                 ->count();
 
             return response()->json([
-                'produtos_atualizados' => $produtosAtualizados,
-                'variacao_media' => round($variacaoMedia, 2),
+                'produtos_atualizados' => $priceAnalysis->produtos_atualizados ?? 0,
+                'variacao_media' => round($priceAnalysis->variacao_media ?? 0, 2),
                 'total_produtos' => $totalProdutos,
-                'aumentos_preco' => $movimentos->aumentos ?? 0,
-                'reducoes_preco' => $movimentos->reducoes ?? 0,
-                'tempo_medio_alteracao' => round($tempoMedio, 1),
+                'aumentos_preco' => $priceAnalysis->aumentos ?? 0,
+                'reducoes_preco' => $priceAnalysis->reducoes ?? 0,
+                'tempo_medio_alteracao' => round($priceAnalysis->tempo_medio ?? 0, 1),
                 'total_precos_armazenados' => $totalPrecos,
             ]);
         });
