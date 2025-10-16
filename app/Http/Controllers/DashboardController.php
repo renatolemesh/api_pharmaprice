@@ -26,24 +26,14 @@ class DashboardController extends Controller
         return Cache::remember($cacheKey, 300, function () use ($farmaciaId) {
             $lastWeek = Carbon::now()->subWeek()->toDateString();
 
-            // Create a CTE with latest previous prices
-            $latestPricesSubquery = DB::table('precos as p_inner')
-                ->select('p_inner.produto_id', 'p_inner.farmacia_id', DB::raw('MAX(p_inner.data) as max_data'))
-                ->when($farmaciaId, fn($q) => $q->where('p_inner.farmacia_id', $farmaciaId))
-                ->where('p_inner.data', '<', DB::raw('p_outer.data'))
-                ->whereColumn('p_inner.produto_id', 'p_outer.produto_id')
-                ->whereColumn('p_inner.farmacia_id', 'p_outer.farmacia_id')
-                ->groupBy('p_inner.produto_id', 'p_inner.farmacia_id')
-                ->limit(1);
-
             // Single query for price movements and variations
             $priceAnalysis = DB::table('precos as p1')
                 ->select([
-                    DB::raw('COUNT(DISTINCT p1.produto_id) as produtos_atualizados'),
-                    DB::raw('AVG(((p1.preco - p2.preco) / NULLIF(p2.preco, 0)) * 100) as variacao_media'),
-                    DB::raw('SUM(CASE WHEN p1.preco > p2.preco THEN 1 ELSE 0 END) as aumentos'),
-                    DB::raw('SUM(CASE WHEN p1.preco < p2.preco THEN 1 ELSE 0 END) as reducoes'),
-                    DB::raw('AVG(DATEDIFF(p1.data, p2.data)) as tempo_medio')
+                    DB::raw('COUNT(DISTINCT p1.produto_id) as updated_products'),
+                    DB::raw('AVG(((p1.preco - p2.preco) / NULLIF(p2.preco, 0)) * 100) as average_variation'),
+                    DB::raw('SUM(CASE WHEN p1.preco > p2.preco THEN 1 ELSE 0 END) as price_increases'),
+                    DB::raw('SUM(CASE WHEN p1.preco < p2.preco THEN 1 ELSE 0 END) as price_decreases'),
+                    DB::raw('AVG(DATEDIFF(p1.data, p2.data)) as average_change_time')
                 ])
                 ->join('precos as p2', function($join) {
                     $join->on('p1.produto_id', '=', 'p2.produto_id')
@@ -60,8 +50,8 @@ class DashboardController extends Controller
                 ->where('p1.data', '>=', $lastWeek)
                 ->first();
 
-            // Separate simpler queries
-            $totalProdutos = DB::table('produtos')
+            // Total products
+            $totalProducts = DB::table('produtos')
                 ->when($farmaciaId, function($q) use ($farmaciaId) {
                     return $q->whereExists(function($query) use ($farmaciaId) {
                         $query->select(DB::raw(1))
@@ -73,21 +63,23 @@ class DashboardController extends Controller
                 })
                 ->count();
 
-            $totalPrecos = DB::table('precos')
+            // Total prices
+            $totalPrices = DB::table('precos')
                 ->when($farmaciaId, fn($q) => $q->where('farmacia_id', $farmaciaId))
                 ->count();
 
             return response()->json([
-                'produtos_atualizados' => $priceAnalysis->produtos_atualizados ?? 0,
-                'variacao_media' => round($priceAnalysis->variacao_media ?? 0, 2),
-                'total_produtos' => $totalProdutos,
-                'aumentos_preco' => $priceAnalysis->aumentos ?? 0,
-                'reducoes_preco' => $priceAnalysis->reducoes ?? 0,
-                'tempo_medio_alteracao' => round($priceAnalysis->tempo_medio ?? 0, 1),
-                'total_precos_armazenados' => $totalPrecos,
+                'updated_products' => $priceAnalysis->updated_products ?? 0,
+                'average_variation' => round($priceAnalysis->average_variation ?? 0, 2),
+                'total_products' => $totalProducts,
+                'price_increases' => $priceAnalysis->price_increases ?? 0,
+                'price_decreases' => $priceAnalysis->price_decreases ?? 0,
+                'average_change_time' => round($priceAnalysis->average_change_time ?? 0, 1),
+                'total_prices_stored' => $totalPrices,
             ]);
         });
     }
+
 
     /**
      * Get price movement trends over time
@@ -108,24 +100,24 @@ class DashboardController extends Controller
             $trends = DB::table(DB::raw('(
                 SELECT
                     DATE(p1.data) as data,
-                    p1.preco as preco_atual,
+                    p1.preco as currentPrice,
                     p1.produto_id,
                     p1.farmacia_id,
                     LAG(p1.preco) OVER (
                         PARTITION BY p1.produto_id, p1.farmacia_id
                         ORDER BY p1.data
-                    ) as preco_anterior
+                    ) as oldPrice
                 FROM precos p1
                 WHERE p1.data >= ?
                 ' . ($farmaciaId ? 'AND p1.farmacia_id = ?' : '') . '
             ) as price_changes'))
             ->selectRaw('
                 data,
-                SUM(CASE WHEN preco_atual > preco_anterior THEN 1 ELSE 0 END) as aumentos,
-                SUM(CASE WHEN preco_atual < preco_anterior THEN 1 ELSE 0 END) as reducoes
+                SUM(CASE WHEN currentPrice > oldPrice THEN 1 ELSE 0 END) as increases,
+                SUM(CASE WHEN currentPrice < oldPrice THEN 1 ELSE 0 END) as decreases
             ')
             ->setBindings($farmaciaId ? [$startDate, $farmaciaId] : [$startDate])
-            ->whereNotNull('preco_anterior')
+            ->whereNotNull('oldPrice')
             ->groupBy('data')
             ->orderBy('data')
             ->get();
@@ -134,8 +126,8 @@ class DashboardController extends Controller
         });
     }
 
-    /**
-     * Get products with biggest price changes
+   /**
+     * Get products with the biggest price changes
      */
     public function getTopPriceChanges(Request $request)
     {
@@ -145,26 +137,26 @@ class DashboardController extends Controller
 
         $cacheKey = "top_changes_{$farmaciaId}_{$limit}_{$type}";
 
-
         return Cache::remember($cacheKey, 300, function () use ($farmaciaId, $limit, $type) {
             $lastWeek = Carbon::now()->subWeek()->toDateString();
             $minValue = 5;
+
             // Using window functions for better performance (MySQL 8.0+)
             $subquery = DB::table('precos as p1')
                 ->join('produtos', 'p1.produto_id', '=', 'produtos.produto_id')
                 ->join('farmacias', 'p1.farmacia_id', '=', 'farmacias.farmacia_id')
                 ->selectRaw("
-                    produtos.descricao,
-                    produtos.EAN,
-                    farmacias.nome_farmacia,
-                    p1.preco as preco_atual,
-                    p1.data as data_alteracao,
+                    produtos.descricao as product_name,
+                    produtos.EAN as ean,
+                    farmacias.nome_farmacia as pharmacy_name,
+                    p1.preco as current_price,
+                    p1.data as change_date,
                     p1.produto_id,
                     p1.farmacia_id,
                     LAG(p1.preco) OVER (
                         PARTITION BY p1.produto_id, p1.farmacia_id
                         ORDER BY p1.data
-                    ) as preco_anterior
+                    ) as previous_price
                 ")
                 ->when($farmaciaId, fn($q) => $q->where('p1.farmacia_id', $farmaciaId))
                 ->where('p1.data', '>=', $lastWeek);
@@ -172,27 +164,27 @@ class DashboardController extends Controller
             $query = DB::table(DB::raw("({$subquery->toSql()}) as price_data"))
                 ->mergeBindings($subquery)
                 ->selectRaw("
-                    descricao,
-                    EAN,
-                    nome_farmacia,
-                    preco_anterior,
-                    preco_atual,
-                    ((preco_atual - preco_anterior) / NULLIF(preco_anterior, 0) * 100) as variacao_percentual,
-                    data_alteracao
+                    product_name,
+                    ean,
+                    pharmacy_name,
+                    previous_price,
+                    current_price,
+                    ((current_price - previous_price) / NULLIF(previous_price, 0) * 100) as variation_percent,
+                    change_date
                 ")
-                ->whereNotNull('preco_anterior')
-                ->where('preco_anterior', '>', $minValue)
-                // Filter out changes greater than 500% (likely errors)
-                ->whereRaw('ABS((preco_atual - preco_anterior) / preco_anterior * 100) <= 500');
+                ->whereNotNull('previous_price')
+                ->where('previous_price', '>', $minValue)
+                // Filter out outliers (changes > 500%)
+                ->whereRaw('ABS((current_price - previous_price) / previous_price * 100) <= 500');
 
             if ($type === 'increase') {
-                $query->whereRaw('preco_atual > preco_anterior')
-                    ->orderByRaw('((preco_atual - preco_anterior) / preco_anterior) DESC');
+                $query->whereRaw('current_price > previous_price')
+                    ->orderByRaw('((current_price - previous_price) / previous_price) DESC');
             } elseif ($type === 'decrease') {
-                $query->whereRaw('preco_atual < preco_anterior')
-                    ->orderByRaw('((preco_atual - preco_anterior) / preco_anterior) ASC');
+                $query->whereRaw('current_price < previous_price')
+                    ->orderByRaw('((current_price - previous_price) / previous_price) ASC');
             } else {
-                $query->orderByRaw('ABS((preco_atual - preco_anterior) / preco_anterior) DESC');
+                $query->orderByRaw('ABS((current_price - previous_price) / previous_price) DESC');
             }
 
             $results = $query->limit($limit)->get();
@@ -221,10 +213,10 @@ class DashboardController extends Controller
                 ->select([
                     'farmacias.farmacia_id',
                     'farmacias.nome_farmacia',
-                    DB::raw('COUNT(DISTINCT precos.produto_id) as produtos_atualizados')
+                    DB::raw('COUNT(DISTINCT precos.produto_id) as updated_products'),
                 ])
                 ->groupBy('farmacias.farmacia_id', 'farmacias.nome_farmacia')
-                ->orderByDesc('produtos_atualizados')
+                ->orderByDesc('updated_products')
                 ->get();
 
             return response()->json(['data' => $stats]);
