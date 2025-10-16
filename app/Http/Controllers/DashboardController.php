@@ -97,8 +97,8 @@ class DashboardController extends Controller
             $startDate = Carbon::now()->subDays($days - 1)->toDateString();
             $endDate = Carbon::now()->toDateString();
 
-            // Generate date series and join with trends
-            $bindings = [$startDate];
+            // Build bindings array
+            $bindings = [$startDate, $endDate, $startDate];
             if ($farmaciaId) {
                 $bindings[] = $farmaciaId;
             }
@@ -109,7 +109,7 @@ class DashboardController extends Controller
                     UNION ALL
                     SELECT DATE_ADD(date, INTERVAL 1 DAY)
                     FROM date_series
-                    WHERE date < DATE('$endDate')
+                    WHERE date < DATE(?)
                 ),
                 price_changes AS (
                     SELECT
