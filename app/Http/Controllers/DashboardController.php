@@ -130,7 +130,7 @@ class DashboardController extends Controller
             ->orderBy('data')
             ->get();
 
-            return response()->json($trends);
+            return response()->json(['data' => $trends]);
         });
     }
 
@@ -197,7 +197,7 @@ class DashboardController extends Controller
 
             $results = $query->limit($limit)->get();
 
-            return response()->json($results);
+            return response()->json(['data' => $results]);
         });
     }
 
@@ -227,7 +227,7 @@ class DashboardController extends Controller
                 ->orderByDesc('produtos_atualizados')
                 ->get();
 
-            return response()->json($stats);
+            return response()->json(['data' => $stats]);
         });
     }
 
