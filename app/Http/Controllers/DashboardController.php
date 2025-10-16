@@ -94,33 +94,56 @@ class DashboardController extends Controller
             : "price_trends_global_{$days}";
 
         return Cache::remember($cacheKey, 600, function () use ($farmaciaId, $days) {
-            $startDate = Carbon::now()->subDays($days)->toDateString();
+            $startDate = Carbon::now()->subDays($days - 1)->toDateString();
+            $endDate = Carbon::now()->toDateString();
 
-            // Use window functions for better performance (MySQL 8.0+)
-            $trends = DB::table(DB::raw('(
+            // Generate date series and join with trends
+            $bindings = [$startDate];
+            if ($farmaciaId) {
+                $bindings[] = $farmaciaId;
+            }
+
+            $query = "
+                WITH RECURSIVE date_series AS (
+                    SELECT DATE(?) as date
+                    UNION ALL
+                    SELECT DATE_ADD(date, INTERVAL 1 DAY)
+                    FROM date_series
+                    WHERE date < DATE('$endDate')
+                ),
+                price_changes AS (
+                    SELECT
+                        DATE(p1.data) as date,
+                        p1.preco as current_price,
+                        p1.produto_id,
+                        p1.farmacia_id,
+                        LAG(p1.preco) OVER (
+                            PARTITION BY p1.produto_id, p1.farmacia_id
+                            ORDER BY p1.data
+                        ) as previous_price
+                    FROM precos p1
+                    WHERE p1.data >= ?
+                    " . ($farmaciaId ? "AND p1.farmacia_id = ?" : "") . "
+                ),
+                daily_trends AS (
+                    SELECT
+                        date,
+                        SUM(CASE WHEN current_price > previous_price THEN 1 ELSE 0 END) as increases,
+                        SUM(CASE WHEN current_price < previous_price THEN 1 ELSE 0 END) as decreases
+                    FROM price_changes
+                    WHERE previous_price IS NOT NULL
+                    GROUP BY date
+                )
                 SELECT
-                    DATE(p1.data) as date,
-                    p1.preco as currentPrice,
-                    p1.produto_id,
-                    p1.farmacia_id,
-                    LAG(p1.preco) OVER (
-                        PARTITION BY p1.produto_id, p1.farmacia_id
-                        ORDER BY p1.data
-                    ) as oldPrice
-                FROM precos p1
-                WHERE p1.data >= ?
-                ' . ($farmaciaId ? 'AND p1.farmacia_id = ?' : '') . '
-            ) as price_changes'))
-            ->selectRaw('
-                date,
-                SUM(CASE WHEN currentPrice > oldPrice THEN 1 ELSE 0 END) as increases,
-                SUM(CASE WHEN currentPrice < oldPrice THEN 1 ELSE 0 END) as decreases
-            ')
-            ->setBindings($farmaciaId ? [$startDate, $farmaciaId] : [$startDate])
-            ->whereNotNull('oldPrice')
-            ->groupBy('date')
-            ->orderBy('date')
-            ->get();
+                    ds.date,
+                    COALESCE(dt.increases, 0) as increases,
+                    COALESCE(dt.decreases, 0) as decreases
+                FROM date_series ds
+                LEFT JOIN daily_trends dt ON ds.date = dt.date
+                ORDER BY ds.date;
+            ";
+
+            $trends = DB::select($query, $bindings);
 
             return response()->json(['data' => $trends]);
         });
