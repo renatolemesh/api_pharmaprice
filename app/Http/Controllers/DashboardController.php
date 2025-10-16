@@ -87,7 +87,7 @@ class DashboardController extends Controller
     public function getPriceTrends(Request $request)
     {
         $farmaciaId = $request->query('farmacia_id');
-        $days = $request->query('days', 30);
+        $days = $request->query('days', 7);
 
         $cacheKey = $farmaciaId
             ? "price_trends_{$farmaciaId}_{$days}"
