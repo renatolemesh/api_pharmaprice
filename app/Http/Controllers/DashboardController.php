@@ -99,7 +99,7 @@ class DashboardController extends Controller
             // Use window functions for better performance (MySQL 8.0+)
             $trends = DB::table(DB::raw('(
                 SELECT
-                    DATE(p1.data) as data,
+                    DATE(p1.data) as date,
                     p1.preco as currentPrice,
                     p1.produto_id,
                     p1.farmacia_id,
@@ -112,14 +112,14 @@ class DashboardController extends Controller
                 ' . ($farmaciaId ? 'AND p1.farmacia_id = ?' : '') . '
             ) as price_changes'))
             ->selectRaw('
-                data,
+                date,
                 SUM(CASE WHEN currentPrice > oldPrice THEN 1 ELSE 0 END) as increases,
                 SUM(CASE WHEN currentPrice < oldPrice THEN 1 ELSE 0 END) as decreases
             ')
             ->setBindings($farmaciaId ? [$startDate, $farmaciaId] : [$startDate])
             ->whereNotNull('oldPrice')
-            ->groupBy('data')
-            ->orderBy('data')
+            ->groupBy('date')
+            ->orderBy('date')
             ->get();
 
             return response()->json(['data' => $trends]);
