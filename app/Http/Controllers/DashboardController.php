@@ -13,21 +13,24 @@ use Carbon\Carbon;
 class DashboardController extends Controller
 {
     /**
-     * Get general statistics for the dashboard
+     * Get general statistics for the dashboard with period comparison
      */
     public function getStatistics(Request $request)
     {
         $farmaciaId = $request->query('farmacia_id');
+        $days = max(1, (int) $request->query('days', 7)); // Default 7 days, minimum 1
 
         $cacheKey = $farmaciaId
-            ? "dashboard_stats_farmacia_{$farmaciaId}"
-            : "dashboard_stats_global";
+            ? "dashboard_stats_farmacia_{$farmaciaId}_days_{$days}"
+            : "dashboard_stats_global_days_{$days}";
 
-        return Cache::remember($cacheKey, 300, function () use ($farmaciaId) {
-            $lastWeek = Carbon::now()->subWeek()->toDateString();
+        return Cache::remember($cacheKey, 300, function () use ($farmaciaId, $days) {
+            $currentPeriodStart = Carbon::now()->subDays($days)->startOfDay();
+            $previousPeriodStart = Carbon::now()->subDays($days * 2)->startOfDay();
+            $previousPeriodEnd = $currentPeriodStart->copy()->subSecond();
 
-            // Single query for price movements and variations
-            $priceAnalysis = DB::table('precos as p1')
+            // Current period analysis
+            $currentAnalysis = DB::table('precos as p1')
                 ->select([
                     DB::raw('COUNT(DISTINCT p1.produto_id) as updated_products'),
                     DB::raw('AVG(((p1.preco - p2.preco) / NULLIF(p2.preco, 0)) * 100) as average_variation'),
@@ -47,10 +50,40 @@ class DashboardController extends Controller
                         )'));
                 })
                 ->when($farmaciaId, fn($q) => $q->where('p1.farmacia_id', $farmaciaId))
-                ->where('p1.data', '>=', $lastWeek)
+                ->whereBetween('p1.data', [$currentPeriodStart, Carbon::now()])
                 ->first();
 
-            // Total products
+            // Previous period analysis
+            $previousAnalysis = DB::table('precos as p1')
+                ->select([
+                    DB::raw('COUNT(DISTINCT p1.produto_id) as updated_products'),
+                    DB::raw('AVG(((p1.preco - p2.preco) / NULLIF(p2.preco, 0)) * 100) as average_variation'),
+                    DB::raw('SUM(CASE WHEN p1.preco > p2.preco THEN 1 ELSE 0 END) as price_increases'),
+                    DB::raw('SUM(CASE WHEN p1.preco < p2.preco THEN 1 ELSE 0 END) as price_decreases'),
+                    DB::raw('AVG(DATEDIFF(p1.data, p2.data)) as average_change_time')
+                ])
+                ->join('precos as p2', function($join) {
+                    $join->on('p1.produto_id', '=', 'p2.produto_id')
+                        ->on('p1.farmacia_id', '=', 'p2.farmacia_id')
+                        ->on('p2.data', '=', DB::raw('(
+                            SELECT MAX(p3.data)
+                            FROM precos p3
+                            WHERE p3.produto_id = p1.produto_id
+                            AND p3.farmacia_id = p1.farmacia_id
+                            AND p3.data < p1.data
+                        )'));
+                })
+                ->when($farmaciaId, fn($q) => $q->where('p1.farmacia_id', $farmaciaId))
+                ->whereBetween('p1.data', [$previousPeriodStart, $previousPeriodEnd])
+                ->first();
+
+            // Calculate percentage changes
+            $calculateChange = function($old, $new) {
+                if ($old == 0) return $new > 0 ? 100 : 0;
+                return round((($new - $old) / abs($old)) * 100, 2);
+            };
+
+            // Total products (not period-dependent)
             $totalProducts = DB::table('produtos')
                 ->when($farmaciaId, function($q) use ($farmaciaId) {
                     return $q->whereExists(function($query) use ($farmaciaId) {
@@ -63,18 +96,43 @@ class DashboardController extends Controller
                 })
                 ->count();
 
-            // Total prices
+            // Total prices stored (not period-dependent)
             $totalPrices = DB::table('precos')
                 ->when($farmaciaId, fn($q) => $q->where('farmacia_id', $farmaciaId))
                 ->count();
 
             return response()->json(['data' => [
-                'updated_products' => $priceAnalysis->updated_products ?? 0,
-                'average_variation' => round($priceAnalysis->average_variation ?? 0, 2),
+                'period_days' => $days,
+                'current_period' => [
+                    'start' => $currentPeriodStart->toDateString(),
+                    'end' => Carbon::now()->toDateString(),
+                ],
+                'updated_products' => $currentAnalysis->updated_products ?? 0,
+                'updated_products_change' => $calculateChange(
+                    $previousAnalysis->updated_products ?? 0,
+                    $currentAnalysis->updated_products ?? 0
+                ),
+                'average_variation' => round($currentAnalysis->average_variation ?? 0, 2),
+                'average_variation_change' => $calculateChange(
+                    $previousAnalysis->average_variation ?? 0,
+                    $currentAnalysis->average_variation ?? 0
+                ),
+                'price_increases' => $currentAnalysis->price_increases ?? 0,
+                'price_increases_change' => $calculateChange(
+                    $previousAnalysis->price_increases ?? 0,
+                    $currentAnalysis->price_increases ?? 0
+                ),
+                'price_decreases' => $currentAnalysis->price_decreases ?? 0,
+                'price_decreases_change' => $calculateChange(
+                    $previousAnalysis->price_decreases ?? 0,
+                    $currentAnalysis->price_decreases ?? 0
+                ),
+                'average_change_time' => round($currentAnalysis->average_change_time ?? 0, 1),
+                'average_change_time_change' => $calculateChange(
+                    $previousAnalysis->average_change_time ?? 0,
+                    $currentAnalysis->average_change_time ?? 0
+                ),
                 'total_products' => $totalProducts,
-                'price_increases' => $priceAnalysis->price_increases ?? 0,
-                'price_decreases' => $priceAnalysis->price_decreases ?? 0,
-                'average_change_time' => round($priceAnalysis->average_change_time ?? 0, 1),
                 'total_prices_stored' => $totalPrices,
             ]]);
         });
