@@ -83,6 +83,11 @@ class DashboardController extends Controller
                 return round((($new - $old) / abs($old)) * 100, 2);
             };
 
+            // Calculate percentage point difference (for values that are already percentages)
+            $calculatePointDifference = function($old, $new) {
+                return round($new - $old, 2);
+            };
+
             // Total products (not period-dependent)
             $totalProducts = DB::table('produtos')
                 ->when($farmaciaId, function($q) use ($farmaciaId) {
@@ -113,7 +118,7 @@ class DashboardController extends Controller
                     $currentAnalysis->updated_products ?? 0
                 ),
                 'average_variation' => round($currentAnalysis->average_variation ?? 0, 2),
-                'average_variation_change' => $calculateChange(
+                'average_variation_change' => $calculatePointDifference(
                     $previousAnalysis->average_variation ?? 0,
                     $currentAnalysis->average_variation ?? 0
                 ),
