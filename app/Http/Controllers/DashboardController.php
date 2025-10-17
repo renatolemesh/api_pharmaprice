@@ -68,7 +68,7 @@ class DashboardController extends Controller
                 ->when($farmaciaId, fn($q) => $q->where('farmacia_id', $farmaciaId))
                 ->count();
 
-            return response()->json([
+            return response()->json(['data' => [
                 'updated_products' => $priceAnalysis->updated_products ?? 0,
                 'average_variation' => round($priceAnalysis->average_variation ?? 0, 2),
                 'total_products' => $totalProducts,
@@ -76,7 +76,7 @@ class DashboardController extends Controller
                 'price_decreases' => $priceAnalysis->price_decreases ?? 0,
                 'average_change_time' => round($priceAnalysis->average_change_time ?? 0, 1),
                 'total_prices_stored' => $totalPrices,
-            ]);
+            ]]);
         });
     }
 
