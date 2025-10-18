@@ -263,18 +263,16 @@ class DashboardController extends Controller
                 ->whereRaw('ABS((current_price - previous_price) / previous_price * 100) <= 500');
 
             // 🟢 Top Increase (only first product)
-            $topIncrease = (clone $baseQuery)
+            $topIncreases = (clone $baseQuery)
                 ->whereRaw('current_price > previous_price')
                 ->orderByRaw('((current_price - previous_price) / previous_price) DESC')
-                ->limit(5)
-                ->first();
+                ->limit(5);
 
             // 🔴 Top Decrease (only first product)
-            $topDecrease = (clone $baseQuery)
+            $topDecreases = (clone $baseQuery)
                 ->whereRaw('current_price < previous_price')
                 ->orderByRaw('((current_price - previous_price) / previous_price) ASC')
-                ->limit(5)
-                ->first();
+                ->limit(5);
 
             // 🟡 Main query based on type (for existing behavior)
             $mainQuery = clone $baseQuery;
@@ -293,8 +291,8 @@ class DashboardController extends Controller
 
             return response()->json([
                 'data' => $mainResults,
-                'top_prices_increase' => $topIncrease,
-                'top_prices_decrease' => $topDecrease,
+                'top_prices_increase' => $topIncreases,
+                'top_prices_decrease' => $topDecreases,
             ]);
         });
     }
