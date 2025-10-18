@@ -221,12 +221,13 @@ class DashboardController extends Controller
         $limit = $request->query('limit', 10);
         $type = $request->query('type', 'all'); // 'increase', 'decrease', 'all'
 
-        $cacheKey = "top_changes_{$farmaciaId}_{$limit}_{$type}";
+        $cacheKey = "top_changes_{$farmaciaId}_{$limit}_{$type}_with_lists";
 
         return Cache::remember($cacheKey, 300, function () use ($farmaciaId, $limit, $type) {
             $lastWeek = Carbon::now()->subWeek()->toDateString();
             $minValue = 5;
 
+            // Subquery with window function
             $subquery = DB::table('precos as p1')
                 ->join('produtos', 'p1.produto_id', '=', 'produtos.produto_id')
                 ->join('farmacias', 'p1.farmacia_id', '=', 'farmacias.farmacia_id')
@@ -246,7 +247,7 @@ class DashboardController extends Controller
                 ->when($farmaciaId, fn($q) => $q->where('p1.farmacia_id', $farmaciaId))
                 ->where('p1.data', '>=', $lastWeek);
 
-            $query = DB::table(DB::raw("({$subquery->toSql()}) as price_data"))
+            $baseQuery = DB::table(DB::raw("({$subquery->toSql()}) as price_data"))
                 ->mergeBindings($subquery)
                 ->selectRaw("
                     product_name,
@@ -261,19 +262,40 @@ class DashboardController extends Controller
                 ->where('previous_price', '>', $minValue)
                 ->whereRaw('ABS((current_price - previous_price) / previous_price * 100) <= 500');
 
+            // 🟢 Top Increases
+            $topIncreases = (clone $baseQuery)
+                ->whereRaw('current_price > previous_price')
+                ->orderByRaw('((current_price - previous_price) / previous_price) DESC')
+                ->limit($limit)
+                ->get();
+
+            // 🔴 Top Decreases
+            $topDecreases = (clone $baseQuery)
+                ->whereRaw('current_price < previous_price')
+                ->orderByRaw('((current_price - previous_price) / previous_price) ASC')
+                ->limit($limit)
+                ->get();
+
+            // 🟡 Main query based on type (for existing behavior)
+            $mainQuery = clone $baseQuery;
+
             if ($type === 'increase') {
-                $query->whereRaw('current_price > previous_price')
+                $mainQuery->whereRaw('current_price > previous_price')
                     ->orderByRaw('((current_price - previous_price) / previous_price) DESC');
             } elseif ($type === 'decrease') {
-                $query->whereRaw('current_price < previous_price')
+                $mainQuery->whereRaw('current_price < previous_price')
                     ->orderByRaw('((current_price - previous_price) / previous_price) ASC');
             } else {
-                $query->orderByRaw('ABS((current_price - previous_price) / previous_price) DESC');
+                $mainQuery->orderByRaw('ABS((current_price - previous_price) / previous_price) DESC');
             }
 
-            $results = $query->limit($limit)->get();
+            $mainResults = $mainQuery->limit($limit)->get();
 
-            return response()->json(['data' => $results]);
+            return response()->json([
+                'data' => $mainResults,
+                'top_price_increase' => $topIncreases,
+                'top_price_decrease' => $topDecreases,
+            ]);
         });
     }
 
