@@ -227,7 +227,6 @@ class DashboardController extends Controller
             $lastWeek = Carbon::now()->subWeek()->toDateString();
             $minValue = 5;
 
-            // Using window functions for better performance (MySQL 8.0+)
             $subquery = DB::table('precos as p1')
                 ->join('produtos', 'p1.produto_id', '=', 'produtos.produto_id')
                 ->join('farmacias', 'p1.farmacia_id', '=', 'farmacias.farmacia_id')
@@ -255,12 +254,11 @@ class DashboardController extends Controller
                     pharmacy_name,
                     previous_price,
                     current_price,
-                    ((current_price - previous_price) / NULLIF(previous_price, 0) * 100) as variation_percent,
+                    ROUND(((current_price - previous_price) / NULLIF(previous_price, 0) * 100), 2) as variation_percent,
                     change_date
                 ")
                 ->whereNotNull('previous_price')
                 ->where('previous_price', '>', $minValue)
-                // Filter out outliers (changes > 500%)
                 ->whereRaw('ABS((current_price - previous_price) / previous_price * 100) <= 500');
 
             if ($type === 'increase') {
