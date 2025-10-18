@@ -295,11 +295,11 @@ class DashboardController extends Controller
                         ->where('precos.data', '>=', $lastWeek);
                 })
                 ->select([
-                    'farmacias.farmacia_id',
-                    'farmacias.nome_farmacia',
+                    'farmacias.farmacia_id as pharmacy_id',
+                    'farmacias.nome_farmacia as pharmacy_name',
                     DB::raw('COUNT(DISTINCT precos.produto_id) as updated_products'),
                 ])
-                ->groupBy('farmacias.farmacia_id', 'farmacias.nome_farmacia')
+                ->groupBy('pharmacy_id', 'pharmacy_name')
                 ->orderByDesc('updated_products')
                 ->get();
 
