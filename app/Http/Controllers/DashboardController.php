@@ -293,8 +293,8 @@ class DashboardController extends Controller
 
             return response()->json([
                 'data' => $mainResults,
-                'top_price_increase' => $topIncrease,
-                'top_price_decrease' => $topDecrease,
+                'top_prices_increase' => $topIncrease,
+                'top_prices_decrease' => $topDecrease,
             ]);
         });
     }
