@@ -266,13 +266,15 @@ class DashboardController extends Controller
             $topIncreases = (clone $baseQuery)
                 ->whereRaw('current_price > previous_price')
                 ->orderByRaw('((current_price - previous_price) / previous_price) DESC')
-                ->limit(5);
+                ->limit(5)
+                ->get();
 
             // 🔴 Top Decrease (only first product)
             $topDecreases = (clone $baseQuery)
                 ->whereRaw('current_price < previous_price')
                 ->orderByRaw('((current_price - previous_price) / previous_price) ASC')
-                ->limit(5);
+                ->limit(5)
+                ->get();
 
             // 🟡 Main query based on type (for existing behavior)
             $mainQuery = clone $baseQuery;
