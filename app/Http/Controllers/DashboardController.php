@@ -218,7 +218,7 @@ class DashboardController extends Controller
     public function getTopPriceChanges(Request $request)
     {
         $farmaciaId = $request->query('farmacia_id');
-        $limit = $request->query('limit', 10);
+        $limit = $request->query('limit', 5);
         $type = $request->query('type', 'all'); // 'increase', 'decrease', 'all'
 
         $cacheKey = "top_changes_{$farmaciaId}_{$limit}_{$type}_with_lists";
