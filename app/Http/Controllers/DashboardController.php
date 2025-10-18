@@ -215,7 +215,7 @@ class DashboardController extends Controller
    /**
      * Get products with the biggest price changes
      */
-    public function getTopPriceChanges(Request $request)
+   public function getTopPriceChanges(Request $request)
     {
         $farmaciaId = $request->query('farmacia_id');
         $limit = $request->query('limit', 5);
@@ -269,9 +269,10 @@ class DashboardController extends Controller
                 ->limit(5)
                 ->get();
 
-            // 🔴 Top Decrease (only first product)
+            // 🔴 Top Decrease (only first product) - LIMITED TO 80% MAX DECREASE
             $topDecreases = (clone $baseQuery)
                 ->whereRaw('current_price < previous_price')
+                ->whereRaw('((previous_price - current_price) / previous_price * 100) <= 80')
                 ->orderByRaw('((current_price - previous_price) / previous_price) ASC')
                 ->limit(5)
                 ->get();
@@ -284,6 +285,7 @@ class DashboardController extends Controller
                     ->orderByRaw('((current_price - previous_price) / previous_price) DESC');
             } elseif ($type === 'decrease') {
                 $mainQuery->whereRaw('current_price < previous_price')
+                    ->whereRaw('((previous_price - current_price) / previous_price * 100) <= 80')
                     ->orderByRaw('((current_price - previous_price) / previous_price) ASC');
             } else {
                 $mainQuery->orderByRaw('ABS((current_price - previous_price) / previous_price) DESC');
