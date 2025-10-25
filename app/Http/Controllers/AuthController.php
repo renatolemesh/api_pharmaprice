@@ -37,18 +37,21 @@ class AuthController extends Controller
             'password' => 'required|string',
         ]);
 
-        $user = User::where('email', $request->email)->first(); //vai procurar o user conforme email correspondente
+        $user = User::where('email', $request->email)->first();
 
-        if (! $user || ! Hash::check($request->password, $user->password)) { //checa se encontrou o user, e se o password está correto
+        if (! $user || ! Hash::check($request->password, $user->password)) {
             return response()->json([
                 'message' => 'The provided credentials are incorrect.',
-            ]);
+            ], 401);
         }
 
-        $token = $user->createToken('auth_token')->plainTextToken;
-        $formattedToken = explode('|', $token)[1]; // Remove o prefixo antes do pipe
+        // Delete all previous tokens for this user
+        $user->tokens()->delete();
 
-        return response()->json(['token' => $formattedToken], 200); // Retorna o token formatado
+        $token = $user->createToken('auth_token')->plainTextToken;
+        $formattedToken = explode('|', $token)[1];
+
+        return response()->json(['token' => $formattedToken], 200);
     }
 
 
