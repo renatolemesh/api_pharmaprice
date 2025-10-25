@@ -337,19 +337,30 @@ class DashboardController extends Controller
     public function getSummary(Request $request)
     {
         $farmaciaId = $request->query('farmacia_id');
+        $days = (int) $request->query('days', 7);
 
         $cacheKey = $farmaciaId
-            ? "dashboard_summary_{$farmaciaId}"
-            : "dashboard_summary_global";
+            ? "dashboard_summary_{$farmaciaId}_{$days}"
+            : "dashboard_summary_global_{$days}";
 
-        return Cache::remember($cacheKey, 300, function () use ($request) {
-            // Chama os métodos individuais
-            $statistics = $this->getStatistics($request)->getData();
-            $topChanges = $this->getTopPriceChanges($request)->getData();
+        return Cache::remember($cacheKey, 300, function () use ($farmaciaId, $days) {
+            // Use the actual Request object
+            $mockRequest = new Request(['farmacia_id' => $farmaciaId, 'days' => $days]);
+
+            $statistics = $this->getStatistics($mockRequest)->getData();
+            $trends = $this->getPriceTrends($mockRequest)->getData();
+            $topChanges = $this->getTopPriceChanges($mockRequest)->getData();
+            $pharmacyStats = $this->getPharmacyStats($mockRequest)->getData();
 
             return response()->json([
-                'statistics' => $statistics,
-                'top_changes' => $topChanges,
+                'statistics' => $statistics->data ?? [],
+                'trends' => $trends->data ?? [],
+                'top_changes' => [
+                    'data' => $topChanges->data ?? [],
+                    'top_prices_increase' => $topChanges->top_prices_increase ?? [],
+                    'top_prices_decrease' => $topChanges->top_prices_decrease ?? [],
+                ],
+                'pharmacy_stats' => $pharmacyStats->data ?? [],
             ]);
         });
     }
