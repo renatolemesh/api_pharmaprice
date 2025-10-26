@@ -19,6 +19,7 @@ return new class extends Migration
             $table->date('data')->nullable();
             $table->foreign('farmacia_id')->references('farmacia_id')->on('farmacias')->onDelete('cascade');
             $table->foreign('produto_id')->references('produto_id')->on('produtos')->onDelete('cascade');
+            $table->index(['produto_id', 'farmacia_id', 'preco_id'], 'idx_latest_preco');
         });
     }
 

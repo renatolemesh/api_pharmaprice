@@ -15,7 +15,6 @@ class PrecoController extends Controller
 {
     public function consultar(Request $request)
     {
-        DB::enableQueryLog();
         $validator = Validator::make($request->all(), [
             'ean' => 'nullable|string|max:15',
             'descricao' => 'nullable|string|max:255',
@@ -35,74 +34,66 @@ class PrecoController extends Controller
         $page = $request->query('page', 1);
         $perPage = $request->query('per_page', 100);
 
-        $query = DB::query()
-            ->fromSub(function ($query) {
-                $query->select('p.*')
-                    ->from('precos as p')
-                    ->join(DB::raw('(
-                        SELECT produto_id, farmacia_id, MAX(preco_id) as max_preco_id
-                        FROM precos
-                        GROUP BY produto_id, farmacia_id
-                    ) as latest'), function($join) {
-                        $join->on('p.preco_id', '=', 'latest.max_preco_id');
-                    });
-            }, 'latest_precos')
-            ->join('produtos', 'latest_precos.produto_id', '=', 'produtos.produto_id')
-            ->join('farmacias', 'latest_precos.farmacia_id', '=', 'farmacias.farmacia_id')
-            ->leftJoin('informacoes_produtos', function ($join) {
-                $join->on('produtos.produto_id', '=', 'informacoes_produtos.produto_id')
-                    ->on('latest_precos.farmacia_id', '=', 'informacoes_produtos.farmacia_id');
+        // Use window functions for better performance
+        $query = DB::table('precos as p')
+            ->join('produtos as prod', 'p.produto_id', '=', 'prod.produto_id')
+            ->join('farmacias as f', 'p.farmacia_id', '=', 'f.farmacia_id')
+            ->leftJoin('informacoes_produtos as ip', function ($join) {
+                $join->on('prod.produto_id', '=', 'ip.produto_id')
+                    ->on('p.farmacia_id', '=', 'ip.farmacia_id');
             })
-            ->select([
-                'produtos.descricao',
-                'produtos.EAN',
-                'produtos.laboratorio',
-                'farmacias.nome_farmacia',
-                'latest_precos.preco',
-                'latest_precos.data',
-                'produtos.produto_id',
-                'informacoes_produtos.link'
-            ]);
+            ->selectRaw('
+                prod.descricao,
+                prod.EAN,
+                prod.laboratorio,
+                f.nome_farmacia,
+                p.preco,
+                p.data,
+                prod.produto_id,
+                ip.link
+            ')
+            ->whereRaw('p.preco_id = (
+                SELECT p2.preco_id
+                FROM precos p2
+                WHERE p2.produto_id = p.produto_id
+                    AND p2.farmacia_id = p.farmacia_id
+                ORDER BY p2.preco_id DESC
+                LIMIT 1
+            )');
 
+        // Apply filters
         if ($ean) {
-            $query->where('produtos.EAN', $ean);
+            $query->where('prod.EAN', $ean);
         } elseif ($descricao) {
-            $query->where('produtos.descricao', 'like', '%' . $descricao . '%');
+            $query->where('prod.descricao', 'like', '%' . $descricao . '%');
         } elseif ($farmacia) {
-            $query->where('farmacias.farmacia_id', $farmacia);
+            $query->where('f.farmacia_id', $farmacia);
         }
 
-        $query->orderBy('latest_precos.preco', 'asc');
+        $query->orderBy('p.preco', 'asc');
+
         try {
             if ($noPaginate) {
-                try {
-                    Log::info('Memory usage before query: ' . memory_get_usage());
-                    $resultados = $query->limit(5000000)->get();
-                    Log::info('Memory usage after query: ' . memory_get_usage());
-                    return response()->json(['data' => $resultados]);
-                } catch (\PDOException $e) {
-                    Log::error('Erro PDO:', ['message' => $e->getMessage()]);
-                    return response()->json(['error' => 'Erro de conexão'], 500);
-                } catch (\Exception $e) {
-                    Log::error('Erro geral:', ['message' => $e->getMessage()]);
-                    return response()->json(['error' => 'Erro interno'], 500);
-                }
+                // Use cursor for memory efficiency
+                $resultados = [];
+                $query->chunk(1000, function ($items) use (&$resultados) {
+                    foreach ($items as $item) {
+                        $resultados[] = $item;
+                    }
+                });
+
+                return response()->json(['data' => $resultados]);
             }
 
-            // Manual pagination
-            $total = DB::table(DB::raw("({$query->toSql()}) as sub"))
-                ->mergeBindings($query)
-                ->count(DB::raw('1'));
-
-            $offset = ($page - 1) * $perPage;
-            $resultados = $query->skip($offset)->take($perPage)->get();
+            // Use Laravel's built-in pagination
+            $resultados = $query->paginate($perPage, ['*'], 'page', $page);
 
             return response()->json([
-                'data' => $resultados,
-                'current_page' => $page,
-                'last_page' => ceil($total / $perPage),
-                'per_page' => $perPage,
-                'total' => $total
+                'data' => $resultados->items(),
+                'current_page' => $resultados->currentPage(),
+                'last_page' => $resultados->lastPage(),
+                'per_page' => $resultados->perPage(),
+                'total' => $resultados->total()
             ]);
 
         } catch (\Exception $e) {

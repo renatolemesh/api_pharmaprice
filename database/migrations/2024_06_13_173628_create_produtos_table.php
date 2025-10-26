@@ -16,6 +16,8 @@ return new class extends Migration
             $table->string('descricao', 255)->nullable();
             $table->string('EAN', 15)->unique()->nullable();
             $table->string('laboratorio', 50)->nullable();
+            $table->index('EAN', 'idx_produtos_ean');
+            $table->index('descricao', 'idx_produtos_descricao');
         });
     }
 

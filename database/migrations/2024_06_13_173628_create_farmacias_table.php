@@ -14,6 +14,7 @@ return new class extends Migration
         Schema::create('farmacias', function (Blueprint $table) {
             $table->id('farmacia_id');
             $table->string('nome_farmacia', 15)->nullable();
+            $table->index('farmacia_id', 'idx_farmacias_id');
         });
     }
 
