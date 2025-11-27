@@ -9,6 +9,7 @@ use App\Http\Controllers\HistoricoController;
 use App\Http\Controllers\ProdutoController;
 use App\Http\Controllers\InformacoesProdutoController;
 use App\Http\Controllers\LinkController;
+use App\Http\Controllers\ReportController;
 use Illuminate\Http\Request;
 
 Route::post('/register', [AuthController::class, 'register']);
@@ -32,6 +33,7 @@ Route::delete('/links', [LinkController::class, 'destroy']);
 Route::get('/links', [LinkController::class, 'index']);
 Route::post('/links', [LinkController::class, 'store']);
 Route::get('/descricoes', [DescricaoController::class, 'index']);
+Route::get('/report/export', [ReportController::class, 'export']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::put('/users/{user}', [AuthController::class, 'update']);
