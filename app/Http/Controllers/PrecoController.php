@@ -13,8 +13,7 @@ use Illuminate\Support\Facades\Validator;
 DB::enableQueryLog();
 class PrecoController extends Controller
 {
-    public function consultar(Request $request)
-    {
+    public function consultar(Request $request) {
         $validator = Validator::make($request->all(), [
             'ean' => 'nullable|string|max:15',
             'descricao' => 'nullable|string|max:255',
@@ -31,35 +30,26 @@ class PrecoController extends Controller
         $descricao = $request->query('descricao');
         $farmacia = $request->query('farmacia');
         $noPaginate = $request->query->has('no_paginate');
-        $page = $request->query('page', 1);
         $perPage = $request->query('per_page', 100);
 
-        // Use window functions for better performance
-        $query = DB::table('precos as p')
+        // Use the view instead of correlated subquery
+        $query = DB::table('latest_precos_view as p')
             ->join('produtos as prod', 'p.produto_id', '=', 'prod.produto_id')
             ->join('farmacias as f', 'p.farmacia_id', '=', 'f.farmacia_id')
             ->leftJoin('informacoes_produtos as ip', function ($join) {
                 $join->on('prod.produto_id', '=', 'ip.produto_id')
                     ->on('p.farmacia_id', '=', 'ip.farmacia_id');
             })
-            ->selectRaw('
-                prod.descricao,
-                prod.EAN,
-                prod.laboratorio,
-                f.nome_farmacia,
-                p.preco,
-                p.data,
-                prod.produto_id,
-                ip.link
-            ')
-            ->whereRaw('p.preco_id = (
-                SELECT p2.preco_id
-                FROM precos p2
-                WHERE p2.produto_id = p.produto_id
-                    AND p2.farmacia_id = p.farmacia_id
-                ORDER BY p2.preco_id DESC
-                LIMIT 1
-            )');
+            ->select([
+                'prod.descricao',
+                'prod.EAN',
+                'prod.laboratorio',
+                'f.nome_farmacia',
+                'p.preco',
+                'p.data',
+                'prod.produto_id',
+                'ip.link'
+            ]);
 
         // Apply filters
         if ($ean) {
@@ -74,19 +64,27 @@ class PrecoController extends Controller
 
         try {
             if ($noPaginate) {
-                // Use cursor for memory efficiency
-                $resultados = [];
-                $query->chunk(1000, function ($items) use (&$resultados) {
-                    foreach ($items as $item) {
-                        $resultados[] = $item;
-                    }
-                });
+                // Stream results for reports - more memory efficient
+                return response()->stream(function () use ($query) {
+                    echo '{"data":[';
+                    $first = true;
 
-                return response()->json(['data' => $resultados]);
+                    $query->chunk(1000, function ($items) use (&$first) {
+                        foreach ($items as $item) {
+                            if (!$first) echo ',';
+                            echo json_encode($item);
+                            $first = false;
+                        }
+                    });
+
+                    echo ']}';
+                }, 200, [
+                    'Content-Type' => 'application/json',
+                    'X-Accel-Buffering' => 'no' // Disable nginx buffering
+                ]);
             }
 
-            // Use Laravel's built-in pagination
-            $resultados = $query->paginate($perPage, ['*'], 'page', $page);
+            $resultados = $query->paginate($perPage);
 
             return response()->json([
                 'data' => $resultados->items(),
@@ -95,7 +93,6 @@ class PrecoController extends Controller
                 'per_page' => $resultados->perPage(),
                 'total' => $resultados->total()
             ]);
-
         } catch (\Exception $e) {
             Log::error('Erro na execução da consulta', ['message' => $e->getMessage()]);
             return response()->json(['error' => 'Erro interno do servidor'], 500);
