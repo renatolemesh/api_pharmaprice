@@ -57,7 +57,7 @@ class PrecoController extends Controller
         } elseif ($descricao) {
             $query->where('prod.descricao', 'like', '%' . $descricao . '%');
         } elseif ($farmacia) {
-            $farmaciaIds = array_map('intval', explode(' ', $farmacia));
+            $farmaciaIds = array_map('intval', preg_split('/[\s+,;]+/', $farmacia));
             $query->whereIn('f.farmacia_id', $farmaciaIds);
         }
 
