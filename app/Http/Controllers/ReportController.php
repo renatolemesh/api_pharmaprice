@@ -114,10 +114,11 @@ class ReportController extends Controller
 
             $query->chunk(2000, function ($items) use ($handle) {
                 foreach ($items as $item) {
+                    $clean = fn($v) => preg_replace('/[\r\n]+/', ' ', trim($v));
                     fputcsv($handle, [
-                        $item->nome_farmacia,
-                        $item->descricao,
-                        $item->laboratorio ?? '',
+                        $clean($item->nome_farmacia),
+                        $clean($item->descricao),
+                        $clean($item->laboratorio ?? ''),
                         "\t" . $item->EAN,
                         number_format((float) $item->preco, 2, '.', ''),
                         date('d/m/Y', strtotime($item->data))
