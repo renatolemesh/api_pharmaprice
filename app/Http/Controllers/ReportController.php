@@ -105,22 +105,28 @@ class ReportController extends Controller
         ];
 
         return response()->stream(function () use ($query) {
+            $handle = fopen('php://output', 'w');
+
             // BOM for Excel UTF-8 compatibility
-            echo chr(0xEF) . chr(0xBB) . chr(0xBF);
-            echo "Farmácia;Descrição;Laboratório;EAN;Preço;Data\n";
+            fprintf($handle, chr(0xEF) . chr(0xBB) . chr(0xBF));
 
-            $query->chunk(2000, function ($items) {
+            fputcsv($handle, ['Farmácia', 'Descrição', 'Laboratório', 'EAN', 'Preço', 'Data']);
+
+            $query->chunk(2000, function ($items) use ($handle) {
                 foreach ($items as $item) {
-                    $preco = is_numeric($item->preco) ? number_format((float) $item->preco, 2, ',', '.') : '0,00';
-                    $farmacia = str_replace('"', '""', $item->nome_farmacia);
-                    $descricao = str_replace('"', '""', $item->descricao);
-                    $laboratorio = str_replace('"', '""', $item->laboratorio ?? '');
-                    $data = date('d/m/Y', strtotime($item->data));
-
-                    echo "\"$farmacia\";\"$descricao\";\"$laboratorio\";=\"{$item->EAN}\";$preco;$data\n";
+                    fputcsv($handle, [
+                        $item->nome_farmacia,
+                        $item->descricao,
+                        $item->laboratorio ?? '',
+                        "\t" . $item->EAN,
+                        number_format((float) $item->preco, 2, '.', ''),
+                        date('d/m/Y', strtotime($item->data))
+                    ]);
                 }
                 flush();
             });
+
+            fclose($handle);
         }, 200, $headers);
     }
 
