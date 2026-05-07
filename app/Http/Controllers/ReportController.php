@@ -3,7 +3,6 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
@@ -16,7 +15,9 @@ class ReportController extends Controller
             'descricao' => 'nullable|string|max:255',
             'farmacia' => 'nullable|string',
             'formato' => 'required|in:csv,excel',
-            'priceType' => 'required|in:current,historical'
+            'priceType' => 'required|in:current,historical',
+            'data-inicio' => 'nullable|date',
+            'data-fim' => 'nullable|date',
         ]);
 
         if ($validator->fails()) {
@@ -28,6 +29,8 @@ class ReportController extends Controller
         $farmacia = $request->query('farmacia');
         $formato = $request->query('formato');
         $priceType = $request->query('priceType');
+        $dataInicio = $request->query('data-inicio');
+        $dataFim = $request->query('data-fim');
 
         try {
             if ($priceType === 'current') {
@@ -47,7 +50,6 @@ class ReportController extends Controller
                         'p.data'
                     ]);
             } else {
-                // Historical prices query
                 $query = DB::table('precos as p')
                     ->join('produtos as prod', 'p.produto_id', '=', 'prod.produto_id')
                     ->join('farmacias as f', 'p.farmacia_id', '=', 'f.farmacia_id')
@@ -59,6 +61,14 @@ class ReportController extends Controller
                         'p.preco',
                         'p.data'
                     ]);
+
+                if ($dataInicio && $dataFim) {
+                    $query->whereBetween('p.data', [$dataInicio, $dataFim]);
+                } elseif ($dataInicio) {
+                    $query->where('p.data', '>=', $dataInicio);
+                } elseif ($dataFim) {
+                    $query->where('p.data', '<=', $dataFim);
+                }
             }
 
             // Apply filters
@@ -67,15 +77,16 @@ class ReportController extends Controller
             } elseif ($descricao) {
                 $query->where('prod.descricao', 'like', '%' . $descricao . '%');
             } elseif ($farmacia) {
-                $query->where('f.farmacia_id', $farmacia);
+                $farmaciaIds = array_map('intval', preg_split('/[\s+,;]+/', $farmacia));
+                $query->whereIn('f.farmacia_id', $farmaciaIds);
             }
 
             $query->orderBy('p.preco', 'asc');
 
             if ($formato === 'csv') {
-                return $this->gerarCSV($query);
+                return $this->streamCSV($query);
             } else {
-                return $this->gerarExcel($query);
+                return $this->streamExcel($query);
             }
         } catch (\Exception $e) {
             Log::error('Erro ao exportar dados', ['message' => $e->getMessage()]);
@@ -83,28 +94,25 @@ class ReportController extends Controller
         }
     }
 
-    private function gerarCSV($query) {
+    private function streamCSV($query) {
         $filename = 'relatorio_' . date('Y-m-d_His') . '.csv';
 
         $headers = [
             'Content-Type' => 'text/csv; charset=UTF-8',
             'Content-Disposition' => "attachment; filename=\"$filename\"",
             'Cache-Control' => 'no-cache, no-store, must-revalidate',
-            'Pragma' => 'no-cache',
-            'Expires' => '0'
+            'X-Accel-Buffering' => 'no',
         ];
 
         return response()->stream(function () use ($query) {
             $handle = fopen('php://output', 'w');
 
-            // Add BOM for Excel UTF-8 compatibility
+            // BOM for Excel UTF-8 compatibility
             fprintf($handle, chr(0xEF).chr(0xBB).chr(0xBF));
 
-            // Header
             fputcsv($handle, ['Farmácia', 'Descrição', 'Laboratório', 'EAN', 'Preço', 'Data'], ';');
 
-            // Data in chunks
-            $query->chunk(1000, function ($items) use ($handle) {
+            $query->chunk(2000, function ($items) use ($handle) {
                 foreach ($items as $item) {
                     fputcsv($handle, [
                         $item->nome_farmacia,
@@ -115,60 +123,57 @@ class ReportController extends Controller
                         date('d/m/Y', strtotime($item->data))
                     ], ';');
                 }
+                flush();
             });
 
             fclose($handle);
         }, 200, $headers);
     }
 
-    private function gerarExcel($query) {
-        // You'll need to install: composer require maatwebsite/excel
-        // Or use PhpSpreadsheet directly: composer require phpoffice/phpspreadsheet
-
+    private function streamExcel($query) {
         $filename = 'relatorio_' . date('Y-m-d_His') . '.xlsx';
 
         $headers = [
             'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'Content-Disposition' => "attachment; filename=\"$filename\"",
             'Cache-Control' => 'no-cache, no-store, must-revalidate',
-            'Pragma' => 'no-cache',
-            'Expires' => '0'
         ];
 
-        // Using PhpSpreadsheet directly
         $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
         $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Relatório');
 
-        // Header
+        // Header row
         $sheet->fromArray(['Farmácia', 'Descrição', 'Laboratório', 'EAN', 'Preço', 'Data'], null, 'A1');
-
-        // Style header
         $sheet->getStyle('A1:F1')->getFont()->setBold(true);
 
         $row = 2;
-        $query->chunk(1000, function ($items) use ($sheet, &$row) {
+        $query->chunk(2000, function ($items) use ($sheet, &$row) {
             foreach ($items as $item) {
-                $sheet->fromArray([
-                    $item->nome_farmacia,
-                    $item->descricao,
-                    $item->laboratorio ?? '',
-                    $item->EAN,
-                    $item->preco,
-                    date('d/m/Y', strtotime($item->data))
-                ], null, "A$row");
+                $sheet->setCellValue("A$row", $item->nome_farmacia);
+                $sheet->setCellValue("B$row", $item->descricao);
+                $sheet->setCellValue("C$row", $item->laboratorio ?? '');
+                $sheet->setCellValueExplicit("D$row", $item->EAN, \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+                $sheet->setCellValue("E$row", (float) $item->preco);
+                $sheet->setCellValue("F$row", date('d/m/Y', strtotime($item->data)));
                 $row++;
             }
         });
 
-        // Auto-size columns
+        // Format price column as number
+        $sheet->getStyle('E2:E' . ($row - 1))
+            ->getNumberFormat()
+            ->setFormatCode('#,##0.00');
+
         foreach (range('A', 'F') as $col) {
             $sheet->getColumnDimension($col)->setAutoSize(true);
         }
 
         $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
 
-        return response()->stream(function () use ($writer) {
+        return response()->stream(function () use ($writer, $spreadsheet) {
             $writer->save('php://output');
+            $spreadsheet->disconnectWorksheets();
         }, 200, $headers);
     }
 }

@@ -10,7 +10,6 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 
-DB::enableQueryLog();
 class PrecoController extends Controller
 {
     public function consultar(Request $request) {

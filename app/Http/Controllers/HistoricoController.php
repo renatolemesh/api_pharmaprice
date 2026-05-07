@@ -64,10 +64,44 @@ class HistoricoController extends Controller
         }
 
         if ($noPaginate) {
-            $resultados = $query->get();
-        } else {
-            $resultados = $query->paginate(100);
+            // Stream results to avoid memory exhaustion on large datasets
+            return response()->stream(function () use ($query) {
+                echo '{"data":[';
+                $historico = [];
+
+                $query->chunk(2000, function ($items) use (&$historico) {
+                    foreach ($items as $resultado) {
+                        $key = $resultado->descricao . '-' . $resultado->EAN . '-' . $resultado->nome_farmacia;
+                        if (!isset($historico[$key])) {
+                            $historico[$key] = [
+                                'descricao' => $resultado->descricao,
+                                'EAN' => $resultado->EAN,
+                                'nome_farmacia' => $resultado->nome_farmacia,
+                                'precos' => []
+                            ];
+                        }
+                        $historico[$key]['precos'][] = [
+                            'preco' => $resultado->preco,
+                            'data' => $resultado->data
+                        ];
+                    }
+                });
+
+                $first = true;
+                foreach ($historico as $item) {
+                    if (!$first) echo ',';
+                    echo json_encode($item);
+                    $first = false;
+                }
+
+                echo ']}';
+            }, 200, [
+                'Content-Type' => 'application/json',
+                'X-Accel-Buffering' => 'no',
+            ]);
         }
+
+        $resultados = $query->paginate(100);
 
         if ($resultados->isEmpty()) {
             return response()->json(['message' => 'Nenhum resultado encontrado.'], 200);
@@ -90,16 +124,12 @@ class HistoricoController extends Controller
             ];
         }
 
-        if ($noPaginate) {
-            return response()->json(['data' => array_values($historico)]);
-        } else {
-            return response()->json([
-                'data' => array_values($historico),
-                'current_page' => $resultados->currentPage(),
-                'last_page' => $resultados->lastPage(),
-                'per_page' => $resultados->perPage(),
-                'total' => $resultados->total()
-            ]);
-        }
+        return response()->json([
+            'data' => array_values($historico),
+            'current_page' => $resultados->currentPage(),
+            'last_page' => $resultados->lastPage(),
+            'per_page' => $resultados->perPage(),
+            'total' => $resultados->total()
+        ]);
     }
 }
