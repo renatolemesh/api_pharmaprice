@@ -16,7 +16,20 @@ class InformacoesProduto extends Model
         'farmacia_id',
         'produto_id',
         'link',
-        'sku'
+        'sku',
+        'ativo',
+        'ultima_coleta_em',
+        'ultima_tentativa_em',
+        'falhas_consecutivas',
+        'ultimo_status',
+        'desativado_em',
+    ];
+
+    protected $casts = [
+        'ativo' => 'boolean',
+        'ultima_coleta_em' => 'datetime',
+        'ultima_tentativa_em' => 'datetime',
+        'desativado_em' => 'datetime',
     ];
 
     public $timestamps = false;

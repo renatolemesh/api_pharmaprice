@@ -4,6 +4,7 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DescricaoController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\ColetaController;
 use App\Http\Controllers\PrecoController;
 use App\Http\Controllers\HistoricoController;
 use App\Http\Controllers\ProdutoController;
@@ -25,6 +26,7 @@ Route::post('/produtos', [ProdutoController::class, 'store']);
 Route::get('/produtos', [ProdutoController::class, 'index']);
 Route::get('/produtos/all', [ProdutoController::class, 'indexAll']);
 Route::post('/informacoes_produtos', [InformacoesProdutoController::class, 'store']);
+Route::put('/informacoes_produtos', [InformacoesProdutoController::class, 'upsert']);
 Route::get('/informacoes_produtos', [InformacoesProdutoController::class, 'index']);
 Route::get('/informacoes_produtos/all', [InformacoesProdutoController::class, 'indexAll']);
 Route::post('/precos', [PrecoController::class, 'store']);
@@ -33,6 +35,13 @@ Route::delete('/links', [LinkController::class, 'destroy']);
 Route::get('/links', [LinkController::class, 'index']);
 Route::post('/links', [LinkController::class, 'store']);
 Route::get('/descricoes', [DescricaoController::class, 'index']);
+
+// Heartbeat de coleta: o scraper reporta tudo que viu, e nao so o que mudou.
+Route::post('/coletas', [ColetaController::class, 'store']);
+Route::post('/coletas/execucoes', [ColetaController::class, 'iniciarExecucao']);
+Route::patch('/coletas/execucoes/{execucaoId}', [ColetaController::class, 'finalizarExecucao']);
+Route::get('/coletas/saude', [ColetaController::class, 'saude']);
+
 Route::get('/report/export', [ReportController::class, 'export']);
 
 Route::middleware('auth:sanctum')->group(function () {

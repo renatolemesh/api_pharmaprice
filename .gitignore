@@ -19,3 +19,14 @@ yarn-error.log
 /.idea
 /.vscode
 .docker
+/backups
+backup.env
+
+# Copia local do .env de producao (APP_KEY, credenciais) - nunca versionar
+.env.servidor
+backup.env
+
+# Carregado AUTOMATICAMENTE pelo docker compose: se chegar num servidor,
+# sobrescreve as portas e a config do nginx de producao. Use o
+# docker-compose.local.yml como modelo e copie para ca.
+docker-compose.override.yml

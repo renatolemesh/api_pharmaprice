@@ -12,8 +12,11 @@ return new class extends Migration
      */
     public function up()
     {
+        // OR REPLACE: em producao a view foi criada a mao e a migration nunca
+        // foi registrada, entao um CREATE puro aborta com "table already
+        // exists" e leva junto as migrations seguintes.
         DB::statement('
-            CREATE VIEW latest_precos_view AS
+            CREATE OR REPLACE VIEW latest_precos_view AS
             SELECT p.*
             FROM precos p
             INNER JOIN (

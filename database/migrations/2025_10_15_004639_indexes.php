@@ -2,42 +2,58 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
     /**
-     * Run the migrations.
+     * Indices de consulta da tabela `precos`.
+     *
+     * Idempotente de proposito: em producao estes indices foram criados a mao,
+     * sem passar pelo sistema de migrations, entao a migration continua
+     * marcada como pendente enquanto o efeito dela ja esta no banco. Criar de
+     * novo aborta com "Duplicate key name" e derruba o `migrate` inteiro -
+     * incluindo as migrations seguintes, que e o que se quer aplicar.
      */
+    private const INDICES = [
+        'idx_precos_farmacia_produto_data' => ['farmacia_id', 'produto_id', 'data'],
+        'idx_precos_produto_farmacia_data' => ['produto_id', 'farmacia_id', 'data'],
+        'idx_precos_data' => ['data'],
+    ];
+
     public function up(): void
     {
-        Schema::table('precos', function (Blueprint $table) {
-            $table->index(['farmacia_id', 'produto_id', 'data'], 'idx_precos_farmacia_produto_data');
-            $table->index(['produto_id', 'farmacia_id', 'data'], 'idx_precos_produto_farmacia_data');
-            $table->index('data', 'idx_precos_data');
-        });
+        foreach (self::INDICES as $nome => $colunas) {
+            if ($this->indiceExiste('precos', $nome)) {
+                continue;
+            }
 
-        // Only add if produto_id is not already the primary key
-        // Since it's id('produto_id'), it's already indexed, so you can skip this
-        // Schema::table('produtos', function (Blueprint $table) {
-        //     $table->index('produto_id');
-        // });
+            Schema::table('precos', function (Blueprint $table) use ($nome, $colunas) {
+                $table->index($colunas, $nome);
+            });
+        }
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
-        Schema::table('precos', function (Blueprint $table) {
-            $table->dropIndex('idx_precos_farmacia_produto_data');
-            $table->dropIndex('idx_precos_produto_farmacia_data');
-            $table->dropIndex('idx_precos_data');
-        });
+        foreach (array_keys(self::INDICES) as $nome) {
+            if (!$this->indiceExiste('precos', $nome)) {
+                continue;
+            }
 
-        // If you added the produtos index, drop it here
-        // Schema::table('produtos', function (Blueprint $table) {
-        //     $table->dropIndex(['produto_id']);
-        // });
+            Schema::table('precos', function (Blueprint $table) use ($nome) {
+                $table->dropIndex($nome);
+            });
+        }
+    }
+
+    private function indiceExiste(string $tabela, string $indice): bool
+    {
+        return DB::table('information_schema.statistics')
+            ->where('table_schema', DB::getDatabaseName())
+            ->where('table_name', $tabela)
+            ->where('index_name', $indice)
+            ->exists();
     }
 };

@@ -1,0 +1,37 @@
+# Modelo de ajustes para o ambiente LOCAL de testes.
+#
+# COPIE para docker-compose.override.yml (que e gitignored) para o compose
+# carregar sozinho:
+#
+#     cp docker-compose.local.yml docker-compose.override.yml
+#
+# Ou aponte explicitamente, sem copiar:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+#
+# Este arquivo NAO se chama docker-compose.override.yml de proposito: aquele
+# nome e carregado automaticamente, entao se chegasse num servidor por git pull
+# derrubaria o nginx de producao para a porta 8081 sem TLS.
+#
+# Motivo: 80, 443 e 8080 costumam estar ocupadas na maquina de desenvolvimento.
+#
+# `!override` e obrigatorio: sem ele o compose CONCATENA as listas de portas em
+# vez de substituir, e a porta original continua sendo publicada - foi o que
+# derrubou a primeira tentativa de subir a stack.
+#
+#   nginx       -> http://localhost:8081   (somente HTTP no local)
+#   phpmyadmin  -> http://localhost:8082
+#   mysql       -> 127.0.0.1:3300
+services:
+    nginx:
+        ports: !override
+            - "8081:80"
+        # Config sem TLS: os certificados de producao nao existem aqui e o
+        # nginx nao sobe sem eles.
+        volumes: !override
+            - ./:/var/www
+            - ./docker/nginx-local/:/etc/nginx/conf.d/
+
+    phpmyadmin:
+        ports: !override
+            - "8082:80"

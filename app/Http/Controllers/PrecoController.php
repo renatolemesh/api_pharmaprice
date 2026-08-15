@@ -29,6 +29,7 @@ class PrecoController extends Controller
         $descricao = $request->query('descricao');
         $farmacia = $request->query('farmacia');
         $noPaginate = $request->query->has('no_paginate');
+        $incluirInativos = $request->query->has('incluir_inativos');
         $perPage = $request->query('per_page', 100);
 
         // Use the view instead of correlated subquery
@@ -47,8 +48,20 @@ class PrecoController extends Controller
                 'p.preco',
                 'p.data',
                 'prod.produto_id',
-                'ip.link'
+                'ip.link',
+                'ip.ultima_coleta_em',
+                'ip.ativo'
             ]);
+
+        // Produtos que nenhuma coleta encontra ha mais de 30 dias saem da
+        // consulta: o preco guardado deles nao vale mais nada. O historico
+        // continua em `precos` - nada e apagado, so deixa de ser respondido.
+        // Linhas sem informacoes_produtos sao mantidas: nao ha o que avaliar.
+        if (!$incluirInativos) {
+            $query->where(function ($q) {
+                $q->where('ip.ativo', 1)->orWhereNull('ip.informacao_id');
+            });
+        }
 
         // Apply filters
         if ($ean) {

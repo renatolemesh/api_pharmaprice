@@ -13,7 +13,8 @@ class Farmacia extends Model
     protected $primaryKey = 'farmacia_id';
 
     protected $fillable = [
-        'nome_farmacia'
+        'nome_farmacia',
+        'url_base'
     ];
 
     public $timestamps = false;
