@@ -1,0 +1,42 @@
+# Modelo para rodar a API atras do proxy reverso central.
+#
+# COPIE para docker-compose.override.yml no servidor (o nome override e
+# gitignored e o compose o carrega sozinho):
+#
+#     cp docker-compose.proxy.yml docker-compose.override.yml
+#
+# Contexto: neste servidor as portas 80 e 443 ja pertencem ao nginx-container,
+# que atende n8n, chatwoot, jira-timesheet e webhook-redirector. A API entra na
+# rede `shared-net` sem publicar portas, e o proxy central faz proxy_pass para
+# ela pelo nome do container - o mesmo padrao do jira-dashboard.
+#
+# Sobre os bindings em 127.0.0.1: neste host o Docker escreve direto no
+# iptables e CONTORNA o UFW, entao publicar em 0.0.0.0 exporia MySQL e
+# phpMyAdmin na internet mesmo com o firewall ativo. O acesso a esses dois e
+# por tunel SSH:
+#
+#     ssh -L 3300:127.0.0.1:3300 -L 8080:127.0.0.1:8080 root@servidor
+
+services:
+    nginx:
+        # Nome fixo: e por ele que o proxy central encontra a API.
+        container_name: pharmaprice-api-nginx
+        ports: !override []
+        volumes: !override
+            - ./:/var/www
+            - ./docker/nginx-proxied/:/etc/nginx/conf.d/
+        networks:
+            - laravel
+            - shared-net
+
+    db:
+        ports: !override
+            - "127.0.0.1:3300:3306"
+
+    phpmyadmin:
+        ports: !override
+            - "127.0.0.1:8080:80"
+
+networks:
+    shared-net:
+        external: true
