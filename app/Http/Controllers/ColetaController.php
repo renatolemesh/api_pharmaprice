@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\ExecucaoColeta;
 use App\Models\InformacoesProduto;
+use App\Support\PrecoAtual;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -258,10 +259,9 @@ class ColetaController extends Controller
 
         $produtoIds = array_values(array_unique(array_column($comPreco, 'produto_id')));
 
-        $precosAtuais = DB::table('latest_precos_view')
-            ->where('farmacia_id', $farmaciaId)
-            ->whereIn('produto_id', $produtoIds)
-            ->pluck('preco', 'produto_id');
+        // Le de `precos_atuais`, nao mais da `latest_precos_view`: a view
+        // refazia o GROUP BY da tabela inteira de precos a cada lote coletado.
+        $precosAtuais = PrecoAtual::daFarmacia($farmaciaId, $produtoIds);
 
         $novos = [];
         foreach ($comPreco as $item) {
@@ -285,8 +285,14 @@ class ColetaController extends Controller
             return 0;
         }
 
+        // Log e projecao na mesma transacao: ou as duas valem, ou nenhuma.
+        // `precos_atuais` fora de sincronia com `precos` seria pior que lento —
+        // seria uma busca respondendo preco que nao existe.
         foreach (array_chunk(array_values($novos), 500) as $lote) {
-            DB::table('precos')->insert($lote);
+            DB::transaction(function () use ($lote) {
+                DB::table('precos')->insert($lote);
+                PrecoAtual::projetar($lote);
+            });
         }
 
         foreach (array_keys($novos) as $produtoId) {

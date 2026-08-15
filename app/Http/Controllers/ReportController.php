@@ -34,7 +34,7 @@ class ReportController extends Controller
 
         try {
             if ($priceType === 'current') {
-                $query = DB::table('latest_precos_view as p')
+                $query = DB::table('precos_atuais as p')
                     ->join('produtos as prod', 'p.produto_id', '=', 'prod.produto_id')
                     ->join('farmacias as f', 'p.farmacia_id', '=', 'f.farmacia_id')
                     ->leftJoin('informacoes_produtos as ip', function ($join) {

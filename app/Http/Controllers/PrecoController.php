@@ -4,8 +4,8 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\Preco;
+use App\Support\PrecoAtual;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
@@ -32,8 +32,11 @@ class PrecoController extends Controller
         $incluirInativos = $request->query->has('incluir_inativos');
         $perPage = $request->query('per_page', 100);
 
-        // Use the view instead of correlated subquery
-        $query = DB::table('latest_precos_view as p')
+        // `precos_atuais` no lugar da `latest_precos_view`: a view refazia o
+        // GROUP BY sobre 1,86 milhao de linhas a cada requisicao, e o
+        // paginate() abaixo cobrava isso duas vezes (COUNT + SELECT). Medido
+        // nesta base: 4,9s + 4,9s viraram 0,47s + 0,08s.
+        $query = DB::table('precos_atuais as p')
             ->join('produtos as prod', 'p.produto_id', '=', 'prod.produto_id')
             ->join('farmacias as f', 'p.farmacia_id', '=', 'f.farmacia_id')
             ->leftJoin('informacoes_produtos as ip', function ($join) {
@@ -146,18 +149,16 @@ class PrecoController extends Controller
             }
         }
 
-        // Obter os preços existentes mais recentes
-        $existingPrices = Preco::select('farmacia_id', 'produto_id', 'preco', 'data')
+        // Precos atuais vindos da projecao. A consulta anterior tinha um
+        // subquery com GROUP BY sobre `precos` inteira — o mesmo custo da view,
+        // no caminho da escrita. E agrupava por MAX(data), que empata quando
+        // dois precos do mesmo dia existem; a projecao usa MAX(preco_id), que
+        // nao empata.
+        $existingPrices = DB::table('precos_atuais')
             ->whereIn('farmacia_id', array_column($novosPrecos, 'farmacia_id'))
             ->whereIn('produto_id', array_column($novosPrecos, 'produto_id'))
-            ->whereRaw('(farmacia_id, produto_id, data) IN (
-                SELECT farmacia_id, produto_id, MAX(data)
-                FROM precos
-                GROUP BY farmacia_id, produto_id)')
             ->get()
-            ->keyBy(function ($item) {
-                return $item->farmacia_id . '-' . $item->produto_id;
-            });
+            ->keyBy(fn ($item) => $item->farmacia_id . '-' . $item->produto_id);
 
         // Validar e preparar os novos preços
         $finalPrecos = [];
@@ -183,6 +184,9 @@ class PrecoController extends Controller
                 // Transação para garantir atomicidade
                 DB::transaction(function () use ($finalPrecos) {
                     Preco::insert($finalPrecos);
+                    // A projeção entra na mesma transação: `precos_atuais` fora
+                    // de sincronia faria a busca responder preço inexistente.
+                    PrecoAtual::projetar($finalPrecos);
                 });
                 $resultados = $finalPrecos;
 
@@ -226,11 +230,13 @@ class PrecoController extends Controller
         $cacheKey = "preco_atual_{$farmaciaId}_{$produtoId}";
 
         // Tentando obter o preço do cache
+        // Le da projecao: um SELECT por chave primaria. A consulta anterior
+        // ordenava `precos` por data e pegava a primeira — o que, com dois
+        // precos na mesma data, devolvia qualquer um dos dois.
         $precoAtual = Cache::remember($cacheKey, 3600, function () use ($farmaciaId, $produtoId) {
-            return DB::table('precos')
+            return DB::table('precos_atuais')
                 ->where('farmacia_id', $farmaciaId)
                 ->where('produto_id', $produtoId)
-                ->orderBy('data', 'desc')
                 ->first();
         });
 

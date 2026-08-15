@@ -22,8 +22,19 @@
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="CACHE_STORE" value="array"/>
-        <!-- <env name="DB_CONNECTION" value="sqlite"/> -->
-        <!-- <env name="DB_DATABASE" value=":memory:"/> -->
+        <!--
+            Base separada, e nao sqlite em memoria: as migrations usam SQL
+            especifico de MySQL (CREATE OR REPLACE VIEW, INSERT ... ON
+            DUPLICATE KEY UPDATE, IN de tuplas), entao um sqlite testaria outra
+            coisa. E nao a `webscrap`: RefreshDatabase apagaria a restauracao de
+            producao usada para medir desempenho.
+
+            Criar uma vez:
+              CREATE DATABASE webscrap_test CHARACTER SET utf8mb4
+                COLLATE utf8mb4_unicode_ci;
+              GRANT ALL PRIVILEGES ON webscrap_test.* TO 'suporte'@'%';
+        -->
+        <env name="DB_DATABASE" value="webscrap_test"/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="PULSE_ENABLED" value="false"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
