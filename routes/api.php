@@ -4,7 +4,9 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DescricaoController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\CadastroLoteController;
 use App\Http\Controllers\ColetaController;
+use App\Http\Controllers\FarmaciaController;
 use App\Http\Controllers\PrecoController;
 use App\Http\Controllers\HistoricoController;
 use App\Http\Controllers\ProdutoController;
@@ -20,8 +22,15 @@ Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
 
+// id, nome e dominio de cada farmacia. Evita mapa fixo no consumidor.
+Route::get('/farmacias', [FarmaciaController::class, 'index']);
+
 Route::get('/precos', [PrecoController::class, 'consultar']);
 Route::get('/precos/historico', [HistoricoController::class, 'historico']);
+// Cadastro de produto novo em lote. Substitui as tres chamadas por item
+// (GET /produtos?ean= + POST /produtos + PUT /informacoes_produtos) que faziam
+// uma rodada de 378 produtos novos custar 1.134 requisicoes.
+Route::post('/produtos/lote', [CadastroLoteController::class, 'store']);
 Route::post('/produtos', [ProdutoController::class, 'store']);
 Route::get('/produtos', [ProdutoController::class, 'index']);
 Route::get('/produtos/all', [ProdutoController::class, 'indexAll']);

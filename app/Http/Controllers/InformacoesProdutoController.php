@@ -41,9 +41,41 @@ class InformacoesProdutoController extends Controller
             $query->where('sku', $sku);
         }
 
+        // `?campos=sku,link` devolve so o que foi pedido. Os scrapers da Raia
+        // precisam apenas do par (sku, link) para montar a consulta em lote, e
+        // a resposta inteira dos 79 mil vinculos dela passa de 23 MB - carregada
+        // por rodada so para descartar quase tudo.
+        $campos = $this->camposPedidos($request->query('campos'));
+        if ($campos) {
+            $query->select($campos);
+        }
+
         $informacoes_produto = $query->get();
 
         return response()->json($informacoes_produto);
+    }
+
+    /**
+     * Colunas pedidas em `?campos=`, restritas a uma lista fechada.
+     *
+     * Repassar a string direto para o select deixaria a query aberta a
+     * qualquer expressao vinda de fora.
+     */
+    private function camposPedidos(?string $bruto): array
+    {
+        if (!$bruto) {
+            return [];
+        }
+
+        $permitidos = [
+            'informacoes_id', 'farmacia_id', 'produto_id', 'link', 'sku',
+            'ativo', 'ultima_coleta_em', 'ultima_tentativa_em',
+            'falhas_consecutivas', 'ultimo_status', 'desativado_em',
+        ];
+
+        $pedidos = array_map('trim', explode(',', $bruto));
+
+        return array_values(array_intersect($pedidos, $permitidos));
     }
 
     public function store(Request $request)

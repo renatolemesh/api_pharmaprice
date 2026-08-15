@@ -29,11 +29,25 @@ class LinkController extends Controller
     {
         $validatedData = $request->validate([
             'link' => 'required|string',
+            'farmacia_id' => 'nullable|integer',
         ]);
 
-        Link::where('link', $validatedData['link'])->delete();
+        $query = Link::where('link', $validatedData['link']);
 
-        return response()->json(['message' => 'Link removido com sucesso'], 200);
+        // Sem filtrar por farmacia, remover o link de uma farmacia apagava a
+        // fila de qualquer outra que tivesse o mesmo caminho - e caminhos
+        // curtos como /aas-infantil-30-comprimidos se repetem entre redes.
+        if (!empty($validatedData['farmacia_id'])) {
+            $query->where('farmacia_id', $validatedData['farmacia_id']);
+            Cache::forget("links_farmacia_{$validatedData['farmacia_id']}");
+        }
+
+        $removidos = $query->delete();
+
+        return response()->json([
+            'message' => 'Link removido com sucesso',
+            'removidos' => $removidos,
+        ], 200);
     }
 
     public function store(Request $request)

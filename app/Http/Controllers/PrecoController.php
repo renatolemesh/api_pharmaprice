@@ -45,6 +45,12 @@ class PrecoController extends Controller
                 'prod.EAN',
                 'prod.laboratorio',
                 'f.nome_farmacia',
+                // Dominio da farmacia. `ip.link` guarda caminho, nao URL, e sem
+                // isto quem consome tem que adivinhar o dominio por nome de
+                // farmacia - foi assim que o front passou a mandar o link do
+                // Unipreco para farmaciasunipreco.com.br depois que a coleta
+                // migrou para o marketplace.
+                'f.url_base',
                 'p.preco',
                 'p.data',
                 'prod.produto_id',
