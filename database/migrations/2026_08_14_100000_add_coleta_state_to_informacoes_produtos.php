@@ -34,18 +34,18 @@ return new class extends Migration
             $table->index(['farmacia_id', 'link'], 'idx_ip_farmacia_link');
         });
 
-        // Backfill: melhor aproximacao disponivel da ultima coleta e a data do
-        // ultimo preco registrado. Subestima produtos de preco estavel, por isso
-        // o comando de desativacao exige coleta real recente antes de agir.
-        DB::statement('
-            UPDATE informacoes_produtos ip
-            INNER JOIN (
-                SELECT farmacia_id, produto_id, MAX(data) AS ultima_data
-                FROM precos
-                GROUP BY farmacia_id, produto_id
-            ) p ON p.farmacia_id = ip.farmacia_id AND p.produto_id = ip.produto_id
-            SET ip.ultima_coleta_em = p.ultima_data
-        ');
+        // Sem backfill, de proposito.
+        //
+        // A unica data disponivel para semear seria MAX(precos.data), que e a
+        // data da ultima MUDANCA de preco - nao de coleta. Produto de preco
+        // estavel apareceria como abandonado ha meses, que e exatamente a
+        // ambiguidade que estas colunas existem para eliminar. Semear com ela
+        // seria fabricar um dado errado e chamar de historico.
+        //
+        // `ultima_coleta_em` fica NULL ate a primeira coleta real reportar. O
+        // comando de desativacao trata NULL como "ainda nao observado" e so
+        // passa a considera-lo obsoleto depois que a farmacia acumular a
+        // janela inteira de dias de coleta de verdade.
     }
 
     public function down(): void

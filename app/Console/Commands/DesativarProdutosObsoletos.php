@@ -56,10 +56,20 @@ class DesativarProdutosObsoletos extends Command
                 }
             }
 
+            // NULL significa "nunca observado pelo novo sistema de coleta", e
+            // nao "abandonado": nao houve backfill. Ele so vira obsoleto
+            // depois que a farmacia tiver a janela inteira de dias de coleta
+            // real acumulada - antes disso nao ha base para afirmar nada.
+            $rastreadaHa = $this->diasDeRastreamento($farmacia->farmacia_id);
+            $nuncaVistoConta = $rastreadaHa !== null && $rastreadaHa >= $dias;
+
             $query = InformacoesProduto::where('farmacia_id', $farmacia->farmacia_id)
                 ->where('ativo', true)
-                ->where(function ($q) use ($limite) {
-                    $q->whereNull('ultima_coleta_em')->orWhere('ultima_coleta_em', '<', $limite);
+                ->where(function ($q) use ($limite, $nuncaVistoConta) {
+                    $q->where('ultima_coleta_em', '<', $limite);
+                    if ($nuncaVistoConta) {
+                        $q->orWhereNull('ultima_coleta_em');
+                    }
                 });
 
             $quantidade = (clone $query)->count();
@@ -108,6 +118,20 @@ class DesativarProdutosObsoletos extends Command
      *     autorizaria desativar os outros 99%. A coleta recente precisa ter
      *     enxergado uma fatia critivel do que esta ativo.
      */
+    /**
+     * Ha quantos dias esta farmacia reporta coleta, ou null se nunca reportou.
+     *
+     * Marca desde quando existe dado confiavel. Antes da primeira execucao nao
+     * se sabe nada sobre o catalogo dela, e `ultima_coleta_em` NULL nao pode
+     * ser lido como abandono.
+     */
+    private function diasDeRastreamento(int $farmaciaId): ?int
+    {
+        $primeira = ExecucaoColeta::where('farmacia_id', $farmaciaId)->min('iniciado_em');
+
+        return $primeira ? (int) now()->diffInDays($primeira, true) : null;
+    }
+
     private function motivoParaNaoAgir(int $farmaciaId, int $janela, int $cobertura, int $ativos): ?string
     {
         $execucao = ExecucaoColeta::where('farmacia_id', $farmaciaId)
