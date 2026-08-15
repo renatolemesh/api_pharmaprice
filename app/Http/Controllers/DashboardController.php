@@ -3,96 +3,229 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
-use App\Models\Preco;
-use App\Models\Produto;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 
+/**
+ * Painel de analises.
+ *
+ * Todas as perguntas daqui sao da forma "entre estas duas datas, o que aconteceu
+ * com os precos". Ate a introducao de `precos.preco_anterior` cada uma delas
+ * redescobria, por consulta, qual era o preco antes de cada mudanca — com
+ * subconsulta correlacionada em `getStatistics` e funcao de janela nas outras
+ * duas. Medido em producao: 3,6s por periodo em `getStatistics`, que roda dois
+ * periodos, mais 0,9s do COUNT(*) global; o endpoint inteiro levava ~25s com o
+ * cache frio.
+ *
+ * Agora a coluna ja traz o valor anterior, entao todas viraram agregacao direta
+ * sobre uma faixa de `data`.
+ *
+ * Os metodos publicos so embrulham em JSON; quem calcula e faz cache sao os
+ * `dados*` privados. Isso importa para o `getSummary`: antes ele chamava os
+ * proprios endpoints e serializava quatro JsonResponse dentro do proprio cache.
+ */
 class DashboardController extends Controller
 {
+    /** Janela corrente: o dado muda a cada coleta. */
+    private const TTL_PERIODO = 300;
+
+    /** Serie diaria: so muda quando vira o dia. */
+    private const TTL_TENDENCIAS = 600;
+
+    /** Contagens globais da base — sobem devagar e custam caro. */
+    private const TTL_TOTAIS = 3600;
+
     /**
-     * Get general statistics for the dashboard with period comparison
+     * Geracao do cache.
+     *
+     * O FileStore nao tem tags, e o `clearCache` anterior montava chaves que
+     * nunca existiram — pedia `dashboard_stats_global` quando a chave real era
+     * `dashboard_stats_global_days_7`, entao nunca limpou nada. Versionar a
+     * chave resolve sem tag: subir o contador torna a geracao inteira
+     * inalcancavel de uma vez, e as chaves velhas expiram sozinhas pelo TTL.
      */
+    private function geracao(): int
+    {
+        return (int) Cache::rememberForever('dashboard_geracao', fn () => 1);
+    }
+
+    private function chave(string $nome): string
+    {
+        return 'dashboard_v' . $this->geracao() . '_' . $nome;
+    }
+
+    private function escopo(?int $farmaciaId): string
+    {
+        return $farmaciaId ? "farmacia_{$farmaciaId}" : 'global';
+    }
+
+    // -----------------------------------------------------------------------
+    // Endpoints
+    // -----------------------------------------------------------------------
+
     public function getStatistics(Request $request)
     {
+        [$farmaciaId, $days] = $this->parametros($request);
+
+        return response()->json(['data' => $this->dadosEstatisticas($farmaciaId, $days)]);
+    }
+
+    public function getPriceTrends(Request $request)
+    {
+        [$farmaciaId, $days] = $this->parametros($request);
+
+        return response()->json(['data' => $this->dadosTendencias($farmaciaId, $days)]);
+    }
+
+    public function getTopPriceChanges(Request $request)
+    {
+        [$farmaciaId] = $this->parametros($request);
+        $limit = max(1, min(50, (int) $request->query('limit', 5)));
+        $type  = in_array($request->query('type'), ['increase', 'decrease'], true)
+            ? $request->query('type')
+            : 'all';
+
+        return response()->json($this->dadosMaioresMudancas($farmaciaId, $limit, $type));
+    }
+
+    public function getPharmacyStats(Request $request)
+    {
+        return response()->json(['data' => $this->dadosPorFarmacia()]);
+    }
+
+    public function getSummary(Request $request)
+    {
+        [$farmaciaId, $days] = $this->parametros($request);
+
+        $maiores = $this->dadosMaioresMudancas($farmaciaId, 5, 'all');
+
+        return response()->json([
+            'statistics'     => $this->dadosEstatisticas($farmaciaId, $days),
+            'trends'         => $this->dadosTendencias($farmaciaId, $days),
+            'top_changes'    => $maiores,
+            'pharmacy_stats' => $this->dadosPorFarmacia(),
+        ]);
+    }
+
+    public function clearCache(Request $request)
+    {
+        Cache::forever('dashboard_geracao', $this->geracao() + 1);
+
+        return response()->json(['message' => 'Cache limpo com sucesso']);
+    }
+
+    /** @return array{0: ?int, 1: int} */
+    private function parametros(Request $request): array
+    {
         $farmaciaId = $request->query('farmacia_id');
-        $days = max(1, (int) $request->query('days', 7)); // Default 7 days, minimum 1
 
-        $cacheKey = $farmaciaId
-            ? "dashboard_stats_farmacia_{$farmaciaId}_days_{$days}"
-            : "dashboard_stats_global_days_{$days}";
+        return [
+            $farmaciaId !== null ? (int) $farmaciaId : null,
+            max(1, min(365, (int) $request->query('days', 7))),
+        ];
+    }
 
-        return Cache::remember($cacheKey, 300, function () use ($farmaciaId, $days) {
-            $currentPeriodStart = Carbon::now()->subDays($days)->startOfDay();
-            $previousPeriodStart = Carbon::now()->subDays($days * 2)->startOfDay();
-            $previousPeriodEnd = $currentPeriodStart->copy()->subSecond();
+    // -----------------------------------------------------------------------
+    // Dados
+    // -----------------------------------------------------------------------
 
-            // Current period analysis
-            $currentAnalysis = DB::table('precos as p1')
-                ->select([
-                    DB::raw('COUNT(DISTINCT p1.produto_id) as updated_products'),
-                    DB::raw('AVG(((p1.preco - p2.preco) / NULLIF(p2.preco, 0)) * 100) as average_variation'),
-                    DB::raw('SUM(CASE WHEN p1.preco > p2.preco THEN 1 ELSE 0 END) as price_increases'),
-                    DB::raw('SUM(CASE WHEN p1.preco < p2.preco THEN 1 ELSE 0 END) as price_decreases'),
-                    DB::raw('AVG(DATEDIFF(p1.data, p2.data)) as average_change_time')
-                ])
-                ->join('precos as p2', function($join) {
-                    $join->on('p1.produto_id', '=', 'p2.produto_id')
-                        ->on('p1.farmacia_id', '=', 'p2.farmacia_id')
-                        ->on('p2.data', '=', DB::raw('(
-                            SELECT MAX(p3.data)
-                            FROM precos p3
-                            WHERE p3.produto_id = p1.produto_id
-                            AND p3.farmacia_id = p1.farmacia_id
-                            AND p3.data < p1.data
-                        )'));
-                })
-                ->when($farmaciaId, fn($q) => $q->where('p1.farmacia_id', $farmaciaId))
-                ->whereBetween('p1.data', [$currentPeriodStart, Carbon::now()])
-                ->first();
+    private function dadosEstatisticas(?int $farmaciaId, int $days): array
+    {
+        $chave = $this->chave('stats_' . $this->escopo($farmaciaId) . "_days_{$days}");
 
-            // Previous period analysis
-            $previousAnalysis = DB::table('precos as p1')
-                ->select([
-                    DB::raw('COUNT(DISTINCT p1.produto_id) as updated_products'),
-                    DB::raw('AVG(((p1.preco - p2.preco) / NULLIF(p2.preco, 0)) * 100) as average_variation'),
-                    DB::raw('SUM(CASE WHEN p1.preco > p2.preco THEN 1 ELSE 0 END) as price_increases'),
-                    DB::raw('SUM(CASE WHEN p1.preco < p2.preco THEN 1 ELSE 0 END) as price_decreases'),
-                    DB::raw('AVG(DATEDIFF(p1.data, p2.data)) as average_change_time')
-                ])
-                ->join('precos as p2', function($join) {
-                    $join->on('p1.produto_id', '=', 'p2.produto_id')
-                        ->on('p1.farmacia_id', '=', 'p2.farmacia_id')
-                        ->on('p2.data', '=', DB::raw('(
-                            SELECT MAX(p3.data)
-                            FROM precos p3
-                            WHERE p3.produto_id = p1.produto_id
-                            AND p3.farmacia_id = p1.farmacia_id
-                            AND p3.data < p1.data
-                        )'));
-                })
-                ->when($farmaciaId, fn($q) => $q->where('p1.farmacia_id', $farmaciaId))
-                ->whereBetween('p1.data', [$previousPeriodStart, $previousPeriodEnd])
-                ->first();
+        return Cache::remember($chave, self::TTL_PERIODO, function () use ($farmaciaId, $days) {
+            $inicioAtual    = Carbon::now()->subDays($days)->startOfDay();
+            $inicioAnterior = Carbon::now()->subDays($days * 2)->startOfDay();
+            $fimAnterior    = $inicioAtual->copy()->subSecond();
 
-            // Calculate percentage changes
-            $calculateChange = function($old, $new) {
-                if ($old == 0) return $new > 0 ? 100 : 0;
-                return round((($new - $old) / abs($old)) * 100, 2);
+            $atual    = $this->agregarPeriodo($farmaciaId, $inicioAtual, Carbon::now());
+            $anterior = $this->agregarPeriodo($farmaciaId, $inicioAnterior, $fimAnterior);
+
+            // Variacao relativa entre os dois periodos.
+            $variacao = function ($velho, $novo) {
+                if ((float) $velho == 0.0) {
+                    return $novo > 0 ? 100 : 0;
+                }
+                return round((($novo - $velho) / abs($velho)) * 100, 2);
             };
 
-            // Calculate percentage point difference (for values that are already percentages)
-            $calculatePointDifference = function($old, $new) {
-                return round($new - $old, 2);
-            };
+            // Para valores que ja sao percentuais, a diferenca e em pontos —
+            // percentual de percentual nao quer dizer nada.
+            $pontos = fn ($velho, $novo) => round($novo - $velho, 2);
 
-            // Total products (not period-dependent)
-            $totalProducts = DB::table('produtos')
-                ->when($farmaciaId, function($q) use ($farmaciaId) {
-                    return $q->whereExists(function($query) use ($farmaciaId) {
-                        $query->select(DB::raw(1))
+            return [
+                'period_days' => $days,
+                'current_period' => [
+                    'start' => $inicioAtual->toDateString(),
+                    'end'   => Carbon::now()->toDateString(),
+                ],
+                'updated_products' => (int) ($atual->updated_products ?? 0),
+                'updated_products_change' => $variacao(
+                    $anterior->updated_products ?? 0,
+                    $atual->updated_products ?? 0
+                ),
+                'average_variation' => round($atual->average_variation ?? 0, 2),
+                'average_variation_change' => $pontos(
+                    $anterior->average_variation ?? 0,
+                    $atual->average_variation ?? 0
+                ),
+                'price_increases' => (int) ($atual->price_increases ?? 0),
+                'price_increases_change' => $variacao(
+                    $anterior->price_increases ?? 0,
+                    $atual->price_increases ?? 0
+                ),
+                'price_decreases' => (int) ($atual->price_decreases ?? 0),
+                'price_decreases_change' => $variacao(
+                    $anterior->price_decreases ?? 0,
+                    $atual->price_decreases ?? 0
+                ),
+                'average_change_time' => round($atual->average_change_time ?? 0, 1),
+                'average_change_time_change' => $variacao(
+                    $anterior->average_change_time ?? 0,
+                    $atual->average_change_time ?? 0
+                ),
+            ] + $this->totais($farmaciaId);
+        });
+    }
+
+    /**
+     * Uma passada por `precos` na faixa de datas.
+     *
+     * `preco_anterior IS NOT NULL` exclui o primeiro preco conhecido de cada
+     * par, que nao representa mudanca de nada — e a mesma linha que o JOIN
+     * antigo descartava por nao encontrar par anterior.
+     */
+    private function agregarPeriodo(?int $farmaciaId, Carbon $inicio, Carbon $fim)
+    {
+        return DB::table('precos')
+            ->selectRaw('
+                COUNT(DISTINCT produto_id) as updated_products,
+                AVG(((preco - preco_anterior) / NULLIF(preco_anterior, 0)) * 100) as average_variation,
+                SUM(CASE WHEN preco > preco_anterior THEN 1 ELSE 0 END) as price_increases,
+                SUM(CASE WHEN preco < preco_anterior THEN 1 ELSE 0 END) as price_decreases,
+                AVG(DATEDIFF(data, data_anterior)) as average_change_time
+            ')
+            ->whereNotNull('preco_anterior')
+            ->when($farmaciaId, fn ($q) => $q->where('farmacia_id', $farmaciaId))
+            ->whereBetween('data', [$inicio, $fim])
+            ->first();
+    }
+
+    /**
+     * Totais da base inteira. Cache proprio e mais longo porque nao dependem do
+     * periodo pedido: sem isso, cada valor de `days` pagava de novo um COUNT(*)
+     * de 0,9s sobre 1,86 milhao de linhas.
+     */
+    private function totais(?int $farmaciaId): array
+    {
+        $chave = $this->chave('totais_' . $this->escopo($farmaciaId));
+
+        return Cache::remember($chave, self::TTL_TOTAIS, function () use ($farmaciaId) {
+            $produtos = DB::table('produtos')
+                ->when($farmaciaId, function ($q) use ($farmaciaId) {
+                    return $q->whereExists(function ($sub) use ($farmaciaId) {
+                        $sub->select(DB::raw(1))
                             ->from('precos')
                             ->whereColumn('precos.produto_id', 'produtos.produto_id')
                             ->where('precos.farmacia_id', $farmaciaId)
@@ -101,293 +234,151 @@ class DashboardController extends Controller
                 })
                 ->count();
 
-            // Total prices stored (not period-dependent)
-            $totalPrices = DB::table('precos')
-                ->when($farmaciaId, fn($q) => $q->where('farmacia_id', $farmaciaId))
+            $precos = DB::table('precos')
+                ->when($farmaciaId, fn ($q) => $q->where('farmacia_id', $farmaciaId))
                 ->count();
 
-            return response()->json(['data' => [
-                'period_days' => $days,
-                'current_period' => [
-                    'start' => $currentPeriodStart->toDateString(),
-                    'end' => Carbon::now()->toDateString(),
-                ],
-                'updated_products' => $currentAnalysis->updated_products ?? 0,
-                'updated_products_change' => $calculateChange(
-                    $previousAnalysis->updated_products ?? 0,
-                    $currentAnalysis->updated_products ?? 0
-                ),
-                'average_variation' => round($currentAnalysis->average_variation ?? 0, 2),
-                'average_variation_change' => $calculatePointDifference(
-                    $previousAnalysis->average_variation ?? 0,
-                    $currentAnalysis->average_variation ?? 0
-                ),
-                'price_increases' => $currentAnalysis->price_increases ?? 0,
-                'price_increases_change' => $calculateChange(
-                    $previousAnalysis->price_increases ?? 0,
-                    $currentAnalysis->price_increases ?? 0
-                ),
-                'price_decreases' => $currentAnalysis->price_decreases ?? 0,
-                'price_decreases_change' => $calculateChange(
-                    $previousAnalysis->price_decreases ?? 0,
-                    $currentAnalysis->price_decreases ?? 0
-                ),
-                'average_change_time' => round($currentAnalysis->average_change_time ?? 0, 1),
-                'average_change_time_change' => $calculateChange(
-                    $previousAnalysis->average_change_time ?? 0,
-                    $currentAnalysis->average_change_time ?? 0
-                ),
-                'total_products' => $totalProducts,
-                'total_prices_stored' => $totalPrices,
-            ]]);
+            return [
+                'total_products'      => $produtos,
+                'total_prices_stored' => $precos,
+            ];
         });
     }
-
 
     /**
-     * Get price movement trends over time
+     * Aumentos e reducoes por dia, com os dias sem movimento zerados.
+     *
+     * A versao anterior calculava o preco anterior com LAG sobre uma janela que
+     * comecava na propria data inicial. Isso descartava a primeira mudanca de
+     * cada produto dentro do periodo, porque para ela o LAG nao tinha de onde
+     * olhar para tras — os dias iniciais da serie saiam sistematicamente
+     * subcontados. Lendo a coluna, toda mudanca da faixa entra.
      */
-    public function getPriceTrends(Request $request)
+    private function dadosTendencias(?int $farmaciaId, int $days): array
     {
-        $farmaciaId = $request->query('farmacia_id');
-        $days = $request->query('days', 7);
+        $chave = $this->chave('trends_' . $this->escopo($farmaciaId) . "_days_{$days}");
 
-        $cacheKey = $farmaciaId
-            ? "price_trends_{$farmaciaId}_{$days}"
-            : "price_trends_global_{$days}";
+        return Cache::remember($chave, self::TTL_TENDENCIAS, function () use ($farmaciaId, $days) {
+            $inicio = Carbon::now()->subDays($days - 1)->toDateString();
+            $fim    = Carbon::now()->toDateString();
 
-        return Cache::remember($cacheKey, 600, function () use ($farmaciaId, $days) {
-            $startDate = Carbon::now()->subDays($days - 1)->toDateString();
-            $endDate = Carbon::now()->toDateString();
+            $movimento = DB::table('precos')
+                ->selectRaw('
+                    data as date,
+                    SUM(CASE WHEN preco > preco_anterior THEN 1 ELSE 0 END) as increases,
+                    SUM(CASE WHEN preco < preco_anterior THEN 1 ELSE 0 END) as decreases
+                ')
+                ->whereNotNull('preco_anterior')
+                ->when($farmaciaId, fn ($q) => $q->where('farmacia_id', $farmaciaId))
+                ->whereBetween('data', [$inicio, $fim])
+                ->groupBy('data')
+                ->get()
+                ->keyBy('date');
 
-            // Build bindings array
-            $bindings = [$startDate, $endDate, $startDate];
-            if ($farmaciaId) {
-                $bindings[] = $farmaciaId;
+            // A serie de datas e montada em PHP, e nao com o CTE RECURSIVE que
+            // estava aqui: o banco nao precisa gerar sete linhas para o
+            // aplicativo saber quais dias existem entre duas datas.
+            $serie = [];
+            for ($dia = Carbon::parse($inicio); $dia->lte(Carbon::parse($fim)); $dia->addDay()) {
+                $data = $dia->toDateString();
+                $linha = $movimento->get($data);
+
+                $serie[] = [
+                    'date'      => $data,
+                    'increases' => (int) ($linha->increases ?? 0),
+                    'decreases' => (int) ($linha->decreases ?? 0),
+                ];
             }
 
-            $query = "
-                WITH RECURSIVE date_series AS (
-                    SELECT DATE(?) as date
-                    UNION ALL
-                    SELECT DATE_ADD(date, INTERVAL 1 DAY)
-                    FROM date_series
-                    WHERE date < DATE(?)
-                ),
-                price_changes AS (
-                    SELECT
-                        DATE(p1.data) as date,
-                        p1.preco as current_price,
-                        p1.produto_id,
-                        p1.farmacia_id,
-                        LAG(p1.preco) OVER (
-                            PARTITION BY p1.produto_id, p1.farmacia_id
-                            ORDER BY p1.data
-                        ) as previous_price
-                    FROM precos p1
-                    WHERE p1.data >= ?
-                    " . ($farmaciaId ? "AND p1.farmacia_id = ?" : "") . "
-                ),
-                daily_trends AS (
-                    SELECT
-                        date,
-                        SUM(CASE WHEN current_price > previous_price THEN 1 ELSE 0 END) as increases,
-                        SUM(CASE WHEN current_price < previous_price THEN 1 ELSE 0 END) as decreases
-                    FROM price_changes
-                    WHERE previous_price IS NOT NULL
-                    GROUP BY date
-                )
-                SELECT
-                    ds.date,
-                    COALESCE(dt.increases, 0) as increases,
-                    COALESCE(dt.decreases, 0) as decreases
-                FROM date_series ds
-                LEFT JOIN daily_trends dt ON ds.date = dt.date
-                ORDER BY ds.date;
-            ";
-
-            $trends = DB::select($query, $bindings);
-
-            return response()->json(['data' => $trends]);
+            return $serie;
         });
     }
 
-   /**
-     * Get products with the biggest price changes
+    /**
+     * Produtos que mais mexeram de preco na ultima semana.
+     *
+     * Os filtros de sanidade continuam os mesmos: preco anterior acima de R$ 5
+     * (variacao percentual de centavo nao diz nada) e movimento de ate 500%
+     * (acima disso e quase sempre erro de coleta, nao promocao).
      */
-   public function getTopPriceChanges(Request $request)
+    private function dadosMaioresMudancas(?int $farmaciaId, int $limit, string $type): array
     {
-        $farmaciaId = $request->query('farmacia_id');
-        $limit = $request->query('limit', 5);
-        $type = $request->query('type', 'all'); // 'increase', 'decrease', 'all'
+        $chave = $this->chave(
+            'top_' . $this->escopo($farmaciaId) . "_{$limit}_{$type}"
+        );
 
-        $cacheKey = "top_changes_{$farmaciaId}_{$limit}_{$type}_with_lists";
-
-        return Cache::remember($cacheKey, 300, function () use ($farmaciaId, $limit, $type) {
-            $lastWeek = Carbon::now()->subWeek()->toDateString();
-            $minValue = 5;
-
-            // Subquery with window function
-            $subquery = DB::table('precos as p1')
-                ->join('produtos', 'p1.produto_id', '=', 'produtos.produto_id')
-                ->join('farmacias', 'p1.farmacia_id', '=', 'farmacias.farmacia_id')
+        return Cache::remember($chave, self::TTL_PERIODO, function () use ($farmaciaId, $limit, $type) {
+            $base = fn () => DB::table('precos as p')
+                ->join('produtos as prod', 'p.produto_id', '=', 'prod.produto_id')
+                ->join('farmacias as f', 'p.farmacia_id', '=', 'f.farmacia_id')
                 ->selectRaw("
-                    produtos.descricao as product_name,
-                    produtos.EAN as ean,
-                    farmacias.nome_farmacia as pharmacy_name,
-                    p1.preco as current_price,
-                    p1.data as change_date,
-                    p1.produto_id,
-                    p1.farmacia_id,
-                    LAG(p1.preco) OVER (
-                        PARTITION BY p1.produto_id, p1.farmacia_id
-                        ORDER BY p1.data
-                    ) as previous_price
+                    prod.descricao as product_name,
+                    prod.EAN as ean,
+                    f.nome_farmacia as pharmacy_name,
+                    p.preco_anterior as previous_price,
+                    p.preco as current_price,
+                    ROUND(((p.preco - p.preco_anterior) / NULLIF(p.preco_anterior, 0) * 100), 2) as variation_percent,
+                    p.data as change_date
                 ")
-                ->when($farmaciaId, fn($q) => $q->where('p1.farmacia_id', $farmaciaId))
-                ->where('p1.data', '>=', $lastWeek);
+                ->whereNotNull('p.preco_anterior')
+                ->where('p.preco_anterior', '>', 5)
+                ->whereRaw('ABS((p.preco - p.preco_anterior) / p.preco_anterior * 100) <= 500')
+                ->when($farmaciaId, fn ($q) => $q->where('p.farmacia_id', $farmaciaId))
+                ->where('p.data', '>=', Carbon::now()->subWeek()->toDateString());
 
-            $baseQuery = DB::table(DB::raw("({$subquery->toSql()}) as price_data"))
-                ->mergeBindings($subquery)
-                ->selectRaw("
-                    product_name,
-                    ean,
-                    pharmacy_name,
-                    previous_price,
-                    current_price,
-                    ROUND(((current_price - previous_price) / NULLIF(previous_price, 0) * 100), 2) as variation_percent,
-                    change_date
-                ")
-                ->whereNotNull('previous_price')
-                ->where('previous_price', '>', $minValue)
-                ->whereRaw('ABS((current_price - previous_price) / previous_price * 100) <= 500');
-
-            // 🟢 Top Increase (only first product)
-            $topIncreases = (clone $baseQuery)
-                ->whereRaw('current_price > previous_price')
-                ->orderByRaw('((current_price - previous_price) / previous_price) DESC')
+            $altas = $base()
+                ->whereColumn('p.preco', '>', 'p.preco_anterior')
+                ->orderByRaw('(p.preco - p.preco_anterior) / p.preco_anterior DESC')
                 ->limit(5)
                 ->get();
 
-            // 🔴 Top Decrease (only first product) - LIMITED TO 80% MAX DECREASE
-            $topDecreases = (clone $baseQuery)
-                ->whereRaw('current_price < previous_price')
-                ->whereRaw('((previous_price - current_price) / previous_price * 100) <= 80')
-                ->orderByRaw('((current_price - previous_price) / previous_price) ASC')
+            // Queda acima de 80% quase nunca e promocao: e o produto trocando
+            // de apresentacao (caixa de 30 virando caixa de 1) com o mesmo EAN.
+            $baixas = $base()
+                ->whereColumn('p.preco', '<', 'p.preco_anterior')
+                ->whereRaw('(p.preco_anterior - p.preco) / p.preco_anterior * 100 <= 80')
+                ->orderByRaw('(p.preco - p.preco_anterior) / p.preco_anterior ASC')
                 ->limit(5)
                 ->get();
 
-            // 🟡 Main query based on type (for existing behavior)
-            $mainQuery = clone $baseQuery;
+            $principal = $base();
 
             if ($type === 'increase') {
-                $mainQuery->whereRaw('current_price > previous_price')
-                    ->orderByRaw('((current_price - previous_price) / previous_price) DESC');
+                $principal->whereColumn('p.preco', '>', 'p.preco_anterior')
+                    ->orderByRaw('(p.preco - p.preco_anterior) / p.preco_anterior DESC');
             } elseif ($type === 'decrease') {
-                $mainQuery->whereRaw('current_price < previous_price')
-                    ->whereRaw('((previous_price - current_price) / previous_price * 100) <= 80')
-                    ->orderByRaw('((current_price - previous_price) / previous_price) ASC');
+                $principal->whereColumn('p.preco', '<', 'p.preco_anterior')
+                    ->whereRaw('(p.preco_anterior - p.preco) / p.preco_anterior * 100 <= 80')
+                    ->orderByRaw('(p.preco - p.preco_anterior) / p.preco_anterior ASC');
             } else {
-                $mainQuery->orderByRaw('ABS((current_price - previous_price) / previous_price) DESC');
+                $principal->orderByRaw('ABS((p.preco - p.preco_anterior) / p.preco_anterior) DESC');
             }
 
-            $mainResults = $mainQuery->limit($limit)->get();
-
-            return response()->json([
-                'data' => $mainResults,
-                'top_prices_increase' => $topIncreases,
-                'top_prices_decrease' => $topDecreases,
-            ]);
+            return [
+                'data'                => $principal->limit($limit)->get()->all(),
+                'top_prices_increase' => $altas->all(),
+                'top_prices_decrease' => $baixas->all(),
+            ];
         });
     }
 
-
-
-    /**
-     * Get pharmacy update statistics
-     */
-    public function getPharmacyStats(Request $request)
+    private function dadosPorFarmacia(): array
     {
-        $cacheKey = "pharmacy_stats";
-
-        return Cache::remember($cacheKey, 600, function () {
-            $lastWeek = Carbon::now()->subWeek()->toDateString();
-
-            $stats = DB::table('farmacias')
-                ->leftJoin('precos', function($join) use ($lastWeek) {
-                    $join->on('farmacias.farmacia_id', '=', 'precos.farmacia_id')
-                        ->where('precos.data', '>=', $lastWeek);
+        return Cache::remember($this->chave('por_farmacia'), self::TTL_TENDENCIAS, function () {
+            return DB::table('farmacias as f')
+                ->leftJoin('precos as p', function ($join) {
+                    $join->on('f.farmacia_id', '=', 'p.farmacia_id')
+                        ->where('p.data', '>=', Carbon::now()->subWeek()->toDateString());
                 })
                 ->select([
-                    'farmacias.farmacia_id as pharmacy_id',
-                    'farmacias.nome_farmacia as pharmacy_name',
-                    DB::raw('COUNT(DISTINCT precos.produto_id) as updated_products'),
+                    'f.farmacia_id as pharmacy_id',
+                    'f.nome_farmacia as pharmacy_name',
+                    DB::raw('COUNT(DISTINCT p.produto_id) as updated_products'),
                 ])
                 ->groupBy('pharmacy_id', 'pharmacy_name')
                 ->orderByDesc('updated_products')
-                ->get();
-
-            return response()->json(['data' => $stats]);
+                ->get()
+                ->all();
         });
-    }
-
-    /**
-     * Get a complete dashboard summary (optional - for single request)
-     */
-    public function getSummary(Request $request)
-    {
-        $farmaciaId = $request->query('farmacia_id');
-        $days = (int) $request->query('days', 7);
-
-        $cacheKey = $farmaciaId
-            ? "dashboard_summary_{$farmaciaId}_{$days}"
-            : "dashboard_summary_global_{$days}";
-
-        return Cache::remember($cacheKey, 300, function () use ($farmaciaId, $days) {
-            // Use the actual Request object
-            $mockRequest = new Request(['farmacia_id' => $farmaciaId, 'days' => $days]);
-
-            $statistics = $this->getStatistics($mockRequest)->getData();
-            $trends = $this->getPriceTrends($mockRequest)->getData();
-            $topChanges = $this->getTopPriceChanges($mockRequest)->getData();
-            $pharmacyStats = $this->getPharmacyStats($mockRequest)->getData();
-
-            return response()->json([
-                'statistics' => $statistics->data ?? [],
-                'trends' => $trends->data ?? [],
-                'top_changes' => [
-                    'data' => $topChanges->data ?? [],
-                    'top_prices_increase' => $topChanges->top_prices_increase ?? [],
-                    'top_prices_decrease' => $topChanges->top_prices_decrease ?? [],
-                ],
-                'pharmacy_stats' => $pharmacyStats->data ?? [],
-            ]);
-        });
-    }
-
-    /**
-     * Clear dashboard cache
-     */
-    public function clearCache(Request $request)
-    {
-        $farmaciaId = $request->query('farmacia_id');
-
-        $patterns = [
-            "dashboard_stats_*",
-            "price_trends_*",
-            "top_changes_*",
-            "pharmacy_stats",
-        ];
-
-        foreach ($patterns as $pattern) {
-            if ($farmaciaId) {
-                Cache::forget(str_replace('*', "farmacia_{$farmaciaId}", $pattern));
-                Cache::forget(str_replace('*', "{$farmaciaId}_*", $pattern));
-            } else {
-                Cache::forget(str_replace('*', 'global', $pattern));
-            }
-        }
-
-        return response()->json(['message' => 'Cache limpo com sucesso']);
     }
 }

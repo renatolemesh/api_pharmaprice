@@ -267,7 +267,7 @@ class ColetaController extends Controller
         foreach ($comPreco as $item) {
             $atual = $precosAtuais->get($item['produto_id']);
 
-            if ($atual !== null && abs((float) $atual - $item['preco']) <= self::TOLERANCIA_PRECO) {
+            if ($atual !== null && abs((float) $atual->preco - $item['preco']) <= self::TOLERANCIA_PRECO) {
                 continue;
             }
 
@@ -278,6 +278,12 @@ class ColetaController extends Controller
                 'produto_id'  => $item['produto_id'],
                 'preco'       => $item['preco'],
                 'data'        => $dataPreco,
+                // O que este preco substitui. Vem de `precos_atuais`, que e a
+                // projecao verificada de `precos` — no instante do insert ela e,
+                // por definicao, o preco anterior. Nulo quando e o primeiro
+                // preco conhecido do par, e nao "desconhecido".
+                'preco_anterior' => $atual->preco ?? null,
+                'data_anterior'  => $atual->data ?? null,
             ];
         }
 

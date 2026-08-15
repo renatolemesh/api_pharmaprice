@@ -6,13 +6,18 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Reconstroi `precos_atuais` a partir de `precos`.
+ * Reconstroi, a partir do log em `precos`, as duas coisas derivadas dele:
+ * a tabela `precos_atuais` e a coluna `precos.preco_anterior`.
  *
- * A projecao e escrita na mesma transacao do insert, entao em uso normal ela
- * nao diverge. Este comando existe para o que acontece fora do caminho normal:
+ * As duas sao escritas na mesma transacao do insert, entao em uso normal nao
+ * divergem. Este comando existe para o que acontece fora do caminho normal:
  * carga manual por SQL, restauracao de backup parcial, ou uma versao antiga da
  * aplicacao rodando durante um deploy. Sem ele, a unica saida seria refazer a
  * migration.
+ *
+ * `preco_anterior` entra aqui porque e o unico jeito de confirmar que a
+ * projecao nao mentiu: o escritor grava o valor que ele *achava* ser o
+ * anterior, e so o log sabe qual era de fato.
  *
  *   php artisan precos:reconciliar --check   diz se divergiu, sem escrever
  *   php artisan precos:reconciliar           corrige
@@ -21,7 +26,7 @@ class ReconciliarPrecosAtuais extends Command
 {
     protected $signature = 'precos:reconciliar {--check : Apenas relata divergências, não escreve}';
 
-    protected $description = 'Reconstrói precos_atuais a partir do log em precos';
+    protected $description = 'Reconstrói precos_atuais e precos.preco_anterior a partir do log em precos';
 
     public function handle(): int
     {
@@ -58,12 +63,32 @@ class ReconciliarPrecosAtuais extends Command
             WHERE p.preco_id IS NULL
         ')->total;
 
-        if ($divergentes === 0 && $orfas === 0) {
-            $this->info('precos_atuais está de acordo com precos.');
+        // `preco_anterior` conferido contra a linha imediatamente anterior do
+        // mesmo par, por preco_id — o mesmo criterio da carga inicial. `<=>`
+        // porque a primeira mudanca de cada par tem anterior nulo dos dois
+        // lados, e `=` daria falso negativo nela.
+        $anteriorErrado = DB::selectOne('
+            SELECT COUNT(*) AS total
+            FROM (
+                SELECT preco_id, preco_anterior, data_anterior,
+                       LAG(preco) OVER w AS esperado_preco,
+                       LAG(data)  OVER w AS esperado_data
+                FROM precos
+                WINDOW w AS (PARTITION BY farmacia_id, produto_id ORDER BY preco_id)
+            ) c
+            WHERE NOT (c.preco_anterior <=> c.esperado_preco)
+               OR NOT (c.data_anterior  <=> c.esperado_data)
+        ')->total;
+
+        if ($divergentes === 0 && $orfas === 0 && $anteriorErrado === 0) {
+            $this->info('precos_atuais e precos.preco_anterior estão de acordo com precos.');
             return self::SUCCESS;
         }
 
-        $this->warn("Divergências: {$divergentes} desatualizada(s), {$orfas} órfã(s).");
+        $this->warn(
+            "Divergências: {$divergentes} desatualizada(s), {$orfas} órfã(s), "
+            . "{$anteriorErrado} com preco_anterior errado."
+        );
 
         if ($this->option('check')) {
             return self::FAILURE;
@@ -99,7 +124,40 @@ class ReconciliarPrecosAtuais extends Command
             ');
         });
 
-        $this->info('precos_atuais reconstruída.');
+        $this->corrigirPrecoAnterior();
+
+        $this->info('precos_atuais e precos.preco_anterior reconstruídos.');
         return self::SUCCESS;
+    }
+
+    /**
+     * Recalcula `preco_anterior` a partir do log, em lotes por faixa de
+     * produto_id.
+     *
+     * A faixa mantém pares inteiros do mesmo lado do corte, que é o que faz o
+     * resultado ser idêntico ao de um UPDATE único. Cortar por preco_id
+     * partiria a série de um par ao meio e o primeiro item de cada pedaço
+     * ficaria sem anterior.
+     */
+    private function corrigirPrecoAnterior(): void
+    {
+        $maxProduto = (int) DB::table('precos')->max('produto_id');
+        $passo = 20000;
+
+        for ($inicio = 1; $inicio <= $maxProduto; $inicio += $passo) {
+            DB::statement('
+                UPDATE precos p
+                JOIN (
+                    SELECT preco_id,
+                           LAG(preco) OVER w AS anterior_preco,
+                           LAG(data)  OVER w AS anterior_data
+                    FROM precos
+                    WHERE produto_id BETWEEN ? AND ?
+                    WINDOW w AS (PARTITION BY farmacia_id, produto_id ORDER BY preco_id)
+                ) ult ON ult.preco_id = p.preco_id
+                SET p.preco_anterior = ult.anterior_preco,
+                    p.data_anterior  = ult.anterior_data
+            ', [$inicio, $inicio + $passo - 1]);
+        }
     }
 }

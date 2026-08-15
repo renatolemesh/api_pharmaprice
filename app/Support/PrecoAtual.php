@@ -83,7 +83,12 @@ class PrecoAtual
      * fazia a cada lote — era a mesma consulta cara, so que no caminho da
      * escrita em vez do da leitura.
      *
-     * @return \Illuminate\Support\Collection preco indexado por produto_id
+     * Devolve a linha inteira, e nao so o preco: quem insere precisa tambem da
+     * `data` dela para gravar `precos.data_anterior`. Sem isso o intervalo
+     * entre duas mudancas teria que ser redescoberto na leitura, que e
+     * exatamente o custo que essa coluna existe para evitar.
+     *
+     * @return \Illuminate\Support\Collection linha indexada por produto_id
      */
     public static function daFarmacia(int $farmaciaId, array $produtoIds)
     {
@@ -94,6 +99,7 @@ class PrecoAtual
         return DB::table('precos_atuais')
             ->where('farmacia_id', $farmaciaId)
             ->whereIn('produto_id', $produtoIds)
-            ->pluck('preco', 'produto_id');
+            ->get()
+            ->keyBy('produto_id');
     }
 }

@@ -163,18 +163,25 @@ class PrecoController extends Controller
         // Validar e preparar os novos preços
         $finalPrecos = [];
         foreach ($novosPrecos as $key => $dados) {
-            if (isset($existingPrices[$key])) {
-                $precoExistente = $existingPrices[$key];
-                if (abs($precoExistente->preco - $dados['preco']) <= 0.01) {
-                    // Adicionar aos conflitos se o preço for muito semelhante
-                    $conflitos[] = [
-                        'produto_id' => $dados['produto_id'],
-                        'message' => 'Preço semelhante já existe',
-                    ];
-                    continue;
-                }
+            $precoExistente = $existingPrices[$key] ?? null;
+
+            if ($precoExistente !== null
+                && abs($precoExistente->preco - $dados['preco']) <= 0.01) {
+                // Adicionar aos conflitos se o preço for muito semelhante
+                $conflitos[] = [
+                    'produto_id' => $dados['produto_id'],
+                    'message' => 'Preço semelhante já existe',
+                ];
+                continue;
             }
-            // Adicionar aos preços finais se for válido
+
+            // O valor que esta linha substitui, gravado junto com ela. Vem de
+            // `precos_atuais`, que é a projeção verificada de `precos`: no
+            // instante do insert ela é, por definição, o preço anterior. Nulo
+            // significa "primeiro preço conhecido deste par".
+            $dados['preco_anterior'] = $precoExistente->preco ?? null;
+            $dados['data_anterior']  = $precoExistente->data ?? null;
+
             $finalPrecos[] = $dados;
         }
 
