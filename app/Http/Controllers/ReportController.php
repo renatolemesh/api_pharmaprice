@@ -6,6 +6,11 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
+use OpenSpout\Common\Entity\Cell;
+use OpenSpout\Common\Entity\Row;
+use OpenSpout\Common\Entity\Style\Style;
+use OpenSpout\Writer\XLSX\Options as XlsxOptions;
+use OpenSpout\Writer\XLSX\Writer as XlsxWriter;
 
 class ReportController extends Controller
 {
@@ -164,6 +169,19 @@ class ReportController extends Controller
         }, 200, $headers);
     }
 
+    /**
+     * XLSX escrito em streaming, com o OpenSpout.
+     *
+     * O PhpSpreadsheet monta a planilha inteira como objetos em memoria e so
+     * entao grava: um milhao de celulas viram um milhao de objetos, e o
+     * relatorio completo levava 128s. Cortar o `setAutoSize` — que media o
+     * texto de cada celula para decidir seis larguras — trouxe para 79s, mas o
+     * resto e do modelo em memoria, nao de um detalhe.
+     *
+     * O OpenSpout escreve linha a linha direto no zip de saida e esquece a
+     * linha anterior. Memoria constante, e nada da planilha precisa existir ao
+     * mesmo tempo.
+     */
     private function streamExcel($query) {
         $filename = 'relatorio_' . date('Y-m-d_His') . '.xlsx';
 
@@ -173,55 +191,45 @@ class ReportController extends Controller
             'Cache-Control' => 'no-cache, no-store, must-revalidate',
         ];
 
-        $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
-        $sheet = $spreadsheet->getActiveSheet();
-        $sheet->setTitle('Relatório');
+        return response()->stream(function () use ($query) {
+            $opcoes = new XlsxOptions();
 
-        // Header row
-        $sheet->fromArray(['Farmácia', 'Descrição', 'Laboratório', 'EAN', 'Preço', 'Data'], null, 'A1');
-        $sheet->getStyle('A1:F1')->getFont()->setBold(true);
+            // Colunas indexadas a partir de 1 (A = 1). Larguras tiradas do
+            // conteudo real: descricao e o campo longo, EAN tem 13 digitos,
+            // preco e data sao curtos.
+            foreach ([1 => 16, 2 => 60, 3 => 24, 4 => 16, 5 => 12, 6 => 12] as $coluna => $largura) {
+                $opcoes->setColumnWidth((float) $largura, $coluna);
+            }
 
-        // Mesma troca de `chunk()` por `cursor()` do CSV, e pelo mesmo motivo:
-        // a paginacao por OFFSET refazia a consulta inteira a cada pagina.
-        $row = 2;
-        foreach ($query->cursor() as $item) {
-            $sheet->setCellValue("A$row", $item->nome_farmacia);
-            $sheet->setCellValue("B$row", $item->descricao);
-            $sheet->setCellValue("C$row", $item->laboratorio ?? '');
-            $sheet->setCellValueExplicit("D$row", $item->EAN, \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
-            $sheet->setCellValue("E$row", (float) $item->preco);
-            $sheet->setCellValue("F$row", date('d/m/Y', strtotime($item->data)));
-            $row++;
-        }
+            $writer = new XlsxWriter($opcoes);
+            // Escreve num stream, e nao via ZipArchive: da para gravar direto
+            // na saida da resposta, sem arquivo temporario no meio.
+            $writer->openToFile('php://output');
 
-        // Format price column as number
-        $sheet->getStyle('E2:E' . ($row - 1))
-            ->getNumberFormat()
-            ->setFormatCode('#,##0.00');
+            $writer->addRow(Row::fromValuesWithStyle(
+                ['Farmácia', 'Descrição', 'Laboratório', 'EAN', 'Preço', 'Data'],
+                (new Style())->withFontBold(true)
+            ));
 
-        /*
-         * Largura fixa, e nao `setAutoSize(true)`.
-         *
-         * Auto-dimensionar nao le a coluna: ele mede o texto de CADA celula
-         * dela, uma a uma, com metrica de fonte. Sao 179 mil linhas em seis
-         * colunas — mais de um milhao de medicoes para decidir seis numeros.
-         * As larguras abaixo saem do conteudo real (descricao e o campo longo,
-         * EAN tem 13 digitos, preco e data sao curtos) e chegam no mesmo lugar
-         * sem a conta.
-         */
-        $larguras = ['A' => 16, 'B' => 60, 'C' => 24, 'D' => 16, 'E' => 12, 'F' => 12];
-        foreach ($larguras as $col => $largura) {
-            $sheet->getColumnDimension($col)->setWidth($largura);
-        }
+            $estiloPreco = (new Style())->withFormat('#,##0.00');
 
-        $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
-        // Nao ha formula na planilha; sem isto o escritor varre tudo atras de
-        // alguma para recalcular antes de gravar.
-        $writer->setPreCalculateFormulas(false);
+            foreach ($query->cursor() as $item) {
+                $writer->addRow(new Row([
+                    Cell::fromValue($item->nome_farmacia),
+                    Cell::fromValue($item->descricao),
+                    Cell::fromValue($item->laboratorio ?? ''),
+                    // O EAN chega do banco como string, e o OpenSpout so cria
+                    // celula numerica a partir de int/float de verdade. Entao
+                    // ele fica texto sozinho, sem precisar do prefixo de
+                    // tabulacao que o CSV usa para impedir o Excel de mostrar
+                    // 7,896E+12 no lugar do codigo.
+                    Cell::fromValue($item->EAN),
+                    Cell::fromValue((float) $item->preco, $estiloPreco),
+                    Cell::fromValue(date('d/m/Y', strtotime($item->data))),
+                ]));
+            }
 
-        return response()->stream(function () use ($writer, $spreadsheet) {
-            $writer->save('php://output');
-            $spreadsheet->disconnectWorksheets();
+            $writer->close();
         }, 200, $headers);
     }
 }

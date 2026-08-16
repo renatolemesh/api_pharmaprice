@@ -172,6 +172,55 @@ class RelatorioTest extends TestCase
     }
 
     /**
+     * O XLSX passou do PhpSpreadsheet para o OpenSpout. Trocar de biblioteca
+     * sem abrir o arquivo gerado e apostar: aqui o teste le de volta a planilha
+     * e confere que ela tem cabecalho, valor e — o detalhe que mais quebra em
+     * exportacao de codigo de barras — o EAN como texto, e nao como numero que
+     * o Excel mostraria em notacao cientifica.
+     */
+    public function test_excel_sai_legivel_com_ean_em_texto(): void
+    {
+        $this->postJson('/api/precos', [
+            'precos' => [[
+                'farmacia_id' => $this->farmaciaId,
+                'produto_id'  => $this->produtoId,
+                'preco'       => 12.90,
+                'data'        => '2026-08-01',
+            ]],
+        ])->assertOk();
+
+        $resposta = $this->get('/api/report/export?formato=excel&priceType=current');
+        $resposta->assertOk();
+
+        $arquivo = tempnam(sys_get_temp_dir(), 'rel') . '.xlsx';
+        file_put_contents($arquivo, $resposta->streamedContent());
+
+        $leitor = new \OpenSpout\Reader\XLSX\Reader();
+        $leitor->open($arquivo);
+
+        $linhas = [];
+        foreach ($leitor->getSheetIterator() as $planilha) {
+            foreach ($planilha->getRowIterator() as $linha) {
+                $linhas[] = $linha->toArray();
+            }
+        }
+        $leitor->close();
+        @unlink($arquivo);
+
+        $this->assertCount(2, $linhas, 'cabeçalho + uma linha de dados');
+        $this->assertSame('Farmácia', $linhas[0][0]);
+        $this->assertSame('Testefarma', $linhas[1][0]);
+        $this->assertSame('Dipirona Sódica 500mg 20 comprimidos', $linhas[1][1]);
+
+        // O ponto do teste: string, e não float. Como número, o Excel mostraria
+        // 7,89123E+12 e o código de barras ficaria ilegível.
+        $this->assertSame('7891234567890', $linhas[1][3]);
+        $this->assertIsString($linhas[1][3]);
+
+        $this->assertEqualsWithDelta(12.90, $linhas[1][4], 0.001);
+    }
+
+    /**
      * O relatorio percorre a consulta em cursor. Este teste nao mede tempo —
      * mede que nenhuma linha se perdeu ou dobrou na travessia, que era o risco
      * real de trocar a forma de percorrer.
