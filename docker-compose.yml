@@ -64,6 +64,11 @@ services:
     # redis
     redis:
         image: redis:latest
+        # Os outros quatro servicos ja tinham; este ficou de fora e nao voltaria
+        # depois de um reboot. Como a aplicacao usa o Redis para cache e sessao,
+        # o efeito nao seria "sem cache": seriam erros de conexao no primeiro
+        # acesso, num servidor que acabou de subir e aparenta estar bem.
+        restart: unless-stopped
         networks:
             - laravel
 
