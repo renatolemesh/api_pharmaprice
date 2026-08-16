@@ -49,6 +49,21 @@ class ReportController extends Controller
                         'p.preco',
                         'p.data'
                     ]);
+
+                // Mesma regra da busca: produto que nenhuma coleta encontra ha
+                // mais de 30 dias sai do relatorio de preco atual, porque o
+                // preco guardado dele nao vale mais nada. Ate agora as duas
+                // telas discordavam sobre quais produtos existem — a busca
+                // escondia o inativo e o relatorio o entregava.
+                //
+                // Linhas sem registro em informacoes_produtos ficam: nao ha o
+                // que avaliar. `incluir_inativos` desfaz o filtro, para quem
+                // precisa do retrato completo.
+                if (!$request->query->has('incluir_inativos')) {
+                    $query->where(function ($q) {
+                        $q->where('ip.ativo', 1)->orWhereNull('ip.informacao_id');
+                    });
+                }
             } else {
                 $query = DB::table('precos as p')
                     ->join('produtos as prod', 'p.produto_id', '=', 'prod.produto_id')
@@ -94,6 +109,19 @@ class ReportController extends Controller
         }
     }
 
+    /**
+     * Uma consulta so, percorrida em cursor, em vez de paginada.
+     *
+     * `chunk(2000)` parece a escolha economica, mas ele pagina por LIMIT/OFFSET:
+     * cada pagina refaz o join e a ordenacao inteiros e joga fora as primeiras N
+     * linhas. Com 179 mil linhas sao 90 consultas, e o custo de cada uma cresce
+     * com a profundidade — medido em producao: 0,03s no OFFSET 0 e 1,19s no
+     * OFFSET 170.000. A soma dava 71s para um relatorio que, pedido de uma vez,
+     * a mesma base entrega em 2,11s.
+     *
+     * `cursor()` faz exatamente essa consulta unica e vai entregando linha a
+     * linha. E a diferenca entre O(n²) e O(n), nao uma economia de constante.
+     */
     private function streamCSV($query) {
         $filename = 'relatorio_' . date('Y-m-d_His') . '.csv';
 
@@ -101,7 +129,10 @@ class ReportController extends Controller
             'Content-Type' => 'text/csv; charset=UTF-8',
             'Content-Disposition' => "attachment; filename=\"$filename\"",
             'Cache-Control' => 'no-cache, no-store, must-revalidate',
-            'X-Accel-Buffering' => 'no',
+            // Sem `X-Accel-Buffering: no`: ele desliga o buffer do nginx e, com
+            // ele, o gzip. Sao 6 MB de texto que comprimem para cerca de 1 MB, e
+            // a resposta inteira agora fica pronta em segundos — nao ha mais
+            // stream longo para proteger.
         ];
 
         return response()->stream(function () use ($query) {
@@ -112,20 +143,18 @@ class ReportController extends Controller
 
             fputcsv($handle, ['Farmácia', 'Descrição', 'Laboratório', 'EAN', 'Preço', 'Data']);
 
-            $query->chunk(2000, function ($items) use ($handle) {
-                foreach ($items as $item) {
-                    $clean = fn($v) => preg_replace('/[\r\n]+/', ' ', trim($v));
-                    fputcsv($handle, [
-                        $clean($item->nome_farmacia),
-                        $clean($item->descricao),
-                        $clean($item->laboratorio ?? ''),
-                        "\t" . $item->EAN,
-                        number_format((float) $item->preco, 2, '.', ''),
-                        date('d/m/Y', strtotime($item->data))
-                    ]);
-                }
-                flush();
-            });
+            $clean = fn ($v) => preg_replace('/[\r\n]+/', ' ', trim((string) $v));
+
+            foreach ($query->cursor() as $item) {
+                fputcsv($handle, [
+                    $clean($item->nome_farmacia),
+                    $clean($item->descricao),
+                    $clean($item->laboratorio ?? ''),
+                    "\t" . $item->EAN,
+                    number_format((float) $item->preco, 2, '.', ''),
+                    date('d/m/Y', strtotime($item->data))
+                ]);
+            }
 
             fclose($handle);
         }, 200, $headers);
@@ -148,18 +177,18 @@ class ReportController extends Controller
         $sheet->fromArray(['Farmácia', 'Descrição', 'Laboratório', 'EAN', 'Preço', 'Data'], null, 'A1');
         $sheet->getStyle('A1:F1')->getFont()->setBold(true);
 
+        // Mesma troca de `chunk()` por `cursor()` do CSV, e pelo mesmo motivo:
+        // a paginacao por OFFSET refazia a consulta inteira a cada pagina.
         $row = 2;
-        $query->chunk(2000, function ($items) use ($sheet, &$row) {
-            foreach ($items as $item) {
-                $sheet->setCellValue("A$row", $item->nome_farmacia);
-                $sheet->setCellValue("B$row", $item->descricao);
-                $sheet->setCellValue("C$row", $item->laboratorio ?? '');
-                $sheet->setCellValueExplicit("D$row", $item->EAN, \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
-                $sheet->setCellValue("E$row", (float) $item->preco);
-                $sheet->setCellValue("F$row", date('d/m/Y', strtotime($item->data)));
-                $row++;
-            }
-        });
+        foreach ($query->cursor() as $item) {
+            $sheet->setCellValue("A$row", $item->nome_farmacia);
+            $sheet->setCellValue("B$row", $item->descricao);
+            $sheet->setCellValue("C$row", $item->laboratorio ?? '');
+            $sheet->setCellValueExplicit("D$row", $item->EAN, \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+            $sheet->setCellValue("E$row", (float) $item->preco);
+            $sheet->setCellValue("F$row", date('d/m/Y', strtotime($item->data)));
+            $row++;
+        }
 
         // Format price column as number
         $sheet->getStyle('E2:E' . ($row - 1))

@@ -36,6 +36,21 @@ class ColetaController extends Controller
 
     private const PRECO_MAXIMO = 100000;
 
+    /**
+     * Abaixo disto nao e preco, e a farmacia dizendo "nao tenho".
+     *
+     * O piso era zero, o que deixava R$ 0,01 passar como se fosse preco. Na base
+     * eram 25 pares nessa situacao, todos da mesma rede e quase todos em jardinagem
+     * (sementes e adubo Isla) — itens que o site lista sem preco e o scraper le
+     * como um centavo.
+     *
+     * Nao precisa de tratamento novo: preco fora da faixa ja vira `falha`, e
+     * falha nao carimba `ultima_coleta_em` e soma em `falhas_consecutivas`. O
+     * produto envelhece ate ser desativado sozinho, e se um dia voltar com preco
+     * de verdade, `carimbarSucessos` o reativa.
+     */
+    private const PRECO_MINIMO = 0.02;
+
     public function store(Request $request)
     {
         $dados = $request->validate([
@@ -90,9 +105,17 @@ class ColetaController extends Controller
             $preco = isset($bruto['preco']) ? (float) $bruto['preco'] : null;
             $status = $bruto['status'] ?? null;
 
-            if ($preco !== null && ($preco <= 0 || $preco > self::PRECO_MAXIMO)) {
+            if ($preco !== null && ($preco < self::PRECO_MINIMO || $preco > self::PRECO_MAXIMO)) {
                 $preco  = null;
-                $status = $status ?? 'preco_invalido';
+                // O status vinha do scraper, e o `??` de antes so preenchia
+                // quando ele nao mandava nada. Como o scraper manda `ok` sempre
+                // que conseguiu ler a pagina, o registro gravava "ok" para um
+                // item que a API tinha acabado de recusar — e depois nao havia
+                // como saber, por `ultimo_status`, por que ele parou de contar.
+                // Motivo especifico do scraper e mantido; `ok` nao.
+                $status = ($status === null || $status === self::STATUS_OK)
+                    ? 'preco_invalido'
+                    : $status;
             }
 
             $itens[] = [
