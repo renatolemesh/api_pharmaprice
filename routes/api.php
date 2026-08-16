@@ -12,6 +12,7 @@ use App\Http\Controllers\HistoricoController;
 use App\Http\Controllers\ProdutoController;
 use App\Http\Controllers\InformacoesProdutoController;
 use App\Http\Controllers\LinkController;
+use App\Http\Controllers\MercadoController;
 use App\Http\Controllers\ReportController;
 use Illuminate\Http\Request;
 
@@ -26,6 +27,9 @@ Route::get('/user', function (Request $request) {
 Route::get('/farmacias', [FarmaciaController::class, 'index']);
 
 Route::get('/precos', [PrecoController::class, 'consultar']);
+// Preco de mercado de uma lista de EANs, para o comparador de tabela propria.
+// So trafega codigo de barras: o preco de quem pergunta fica no navegador dele.
+Route::post('/precos/mercado', [MercadoController::class, 'lote']);
 Route::get('/precos/historico', [HistoricoController::class, 'historico']);
 // Cadastro de produto novo em lote. Substitui as tres chamadas por item
 // (GET /produtos?ean= + POST /produtos + PUT /informacoes_produtos) que faziam
