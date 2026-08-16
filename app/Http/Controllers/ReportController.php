@@ -129,10 +129,14 @@ class ReportController extends Controller
             'Content-Type' => 'text/csv; charset=UTF-8',
             'Content-Disposition' => "attachment; filename=\"$filename\"",
             'Cache-Control' => 'no-cache, no-store, must-revalidate',
-            // Sem `X-Accel-Buffering: no`: ele desliga o buffer do nginx e, com
-            // ele, o gzip. Sao 6 MB de texto que comprimem para cerca de 1 MB, e
-            // a resposta inteira agora fica pronta em segundos — nao ha mais
-            // stream longo para proteger.
+            // `X-Accel-Buffering: no` saiu porque a resposta nao demora mais o
+            // suficiente para justificar desligar o buffer do nginx.
+            //
+            // Ele NAO afetava a compressao, ao contrario do que parecia: o
+            // nginx comprime resposta em stream do mesmo jeito. Medido — o
+            // corpo ja saia com 33,9 bytes por linha, e sem gzip a mesma linha
+            // ocupa 103,9. Os 18,6 MB de texto continuam chegando como 5,8 MB
+            // no fio, antes e depois desta mudanca.
         ];
 
         return response()->stream(function () use ($query) {
@@ -195,11 +199,25 @@ class ReportController extends Controller
             ->getNumberFormat()
             ->setFormatCode('#,##0.00');
 
-        foreach (range('A', 'F') as $col) {
-            $sheet->getColumnDimension($col)->setAutoSize(true);
+        /*
+         * Largura fixa, e nao `setAutoSize(true)`.
+         *
+         * Auto-dimensionar nao le a coluna: ele mede o texto de CADA celula
+         * dela, uma a uma, com metrica de fonte. Sao 179 mil linhas em seis
+         * colunas — mais de um milhao de medicoes para decidir seis numeros.
+         * As larguras abaixo saem do conteudo real (descricao e o campo longo,
+         * EAN tem 13 digitos, preco e data sao curtos) e chegam no mesmo lugar
+         * sem a conta.
+         */
+        $larguras = ['A' => 16, 'B' => 60, 'C' => 24, 'D' => 16, 'E' => 12, 'F' => 12];
+        foreach ($larguras as $col => $largura) {
+            $sheet->getColumnDimension($col)->setWidth($largura);
         }
 
         $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
+        // Nao ha formula na planilha; sem isto o escritor varre tudo atras de
+        // alguma para recalcular antes de gravar.
+        $writer->setPreCalculateFormulas(false);
 
         return response()->stream(function () use ($writer, $spreadsheet) {
             $writer->save('php://output');
