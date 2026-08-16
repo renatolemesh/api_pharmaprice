@@ -75,16 +75,35 @@ return new class extends Migration
         // lock em 30s, e melhor a migration falhar do que travar a coleta.
         DB::statement('SET SESSION lock_wait_timeout = 30');
 
+        // information_schema.statistics responde de um CACHE, nao do estado
+        // atual. Com o padrao (24h), `indiceExiste` pode afirmar que um indice
+        // existe depois de ele ja ter sido derrubado - foi o que aconteceu na
+        // primeira execucao desta migration: os seis drops funcionaram e ela
+        // ainda assim abortou no quinto com "Can't DROP ...; check that
+        // column/key exists", porque a checagem leu um retrato velho.
+        DB::statement('SET SESSION information_schema_stats_expiry = 0');
+
         foreach (self::REDUNDANTES as $nome) {
             if (!$this->indiceExiste('precos', $nome)) {
                 continue;
             }
 
-            // SQL cru em vez de `Schema::table`: o Blueprint do Laravel emite um
-            // ALTER por chamada e nao aceita ALGORITHM/LOCK. Numa tabela de 2
-            // milhoes de linhas que a coleta escreve o dia inteiro, deixar o
-            // ALTER pegar lock de escrita pararia a coleta no meio.
-            DB::statement("ALTER TABLE precos DROP INDEX `{$nome}`, ALGORITHM=INPLACE, LOCK=NONE");
+            try {
+                // SQL cru em vez de `Schema::table`: o Blueprint do Laravel emite
+                // um ALTER por chamada e nao aceita ALGORITHM/LOCK. Numa tabela
+                // de 2 milhoes de linhas que a coleta escreve o dia inteiro,
+                // deixar o ALTER pegar lock de escrita pararia a coleta no meio.
+                DB::statement("ALTER TABLE precos DROP INDEX `{$nome}`, ALGORITHM=INPLACE, LOCK=NONE");
+            } catch (\Illuminate\Database\QueryException $e) {
+                // 1091 = "can't DROP; check that column/key exists". Aqui isso
+                // significa que o indice ja nao esta la, que e exatamente o
+                // estado que esta migration quer - abortar por causa dele
+                // deixaria a migration marcada como pendente para sempre,
+                // repetindo o mesmo erro em toda implantacao.
+                if (($e->errorInfo[1] ?? null) !== 1091) {
+                    throw $e;
+                }
+            }
         }
     }
 
