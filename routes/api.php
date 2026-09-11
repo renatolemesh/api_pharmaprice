@@ -14,6 +14,7 @@ use App\Http\Controllers\InformacoesProdutoController;
 use App\Http\Controllers\LinkController;
 use App\Http\Controllers\MercadoController;
 use App\Http\Controllers\ReportController;
+use App\Http\Controllers\VariacaoController;
 use Illuminate\Http\Request;
 
 Route::post('/register', [AuthController::class, 'register']);
@@ -31,6 +32,8 @@ Route::get('/precos', [PrecoController::class, 'consultar']);
 // So trafega codigo de barras: o preco de quem pergunta fica no navegador dele.
 Route::post('/precos/mercado', [MercadoController::class, 'lote']);
 Route::get('/precos/historico', [HistoricoController::class, 'historico']);
+// Aumentos e reducoes no periodo, com a variacao sobre o preco anterior.
+Route::get('/precos/variacoes', [VariacaoController::class, 'index']);
 // Cadastro de produto novo em lote. Substitui as tres chamadas por item
 // (GET /produtos?ean= + POST /produtos + PUT /informacoes_produtos) que faziam
 // uma rodada de 378 produtos novos custar 1.134 requisicoes.

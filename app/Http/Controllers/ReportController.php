@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Support\VariacaoPreco;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -14,19 +15,54 @@ use OpenSpout\Writer\XLSX\Writer as XlsxWriter;
 
 class ReportController extends Controller
 {
+    /**
+     * Colunas de cada relatorio: titulo, largura no Excel, tipo e campo.
+     *
+     * O tipo decide a formatacao nos dois formatos de saida — preco com duas
+     * casas, EAN como texto, data em dd/mm/aaaa. Larguras tiradas do conteudo
+     * real: descricao e o campo longo, EAN tem 13 digitos, preco e data sao
+     * curtos.
+     */
+    private const COLUNAS_PRECO = [
+        ['Farmácia', 16, 'texto', 'nome_farmacia'],
+        ['Descrição', 60, 'texto', 'descricao'],
+        ['Laboratório', 24, 'texto', 'laboratorio'],
+        ['EAN', 16, 'ean', 'EAN'],
+        ['Preço', 12, 'preco', 'preco'],
+        ['Data', 12, 'data', 'data'],
+    ];
+
+    private const COLUNAS_VARIACAO = [
+        ['Farmácia', 16, 'texto', 'nome_farmacia'],
+        ['Descrição', 60, 'texto', 'descricao'],
+        ['Laboratório', 24, 'texto', 'laboratorio'],
+        ['EAN', 16, 'ean', 'EAN'],
+        ['Preço anterior', 14, 'preco', 'preco_anterior'],
+        ['Data anterior', 14, 'data', 'data_anterior'],
+        ['Preço novo', 14, 'preco', 'preco'],
+        ['Data da mudança', 16, 'data', 'data'],
+        ['Variação (%)', 14, 'percentual', 'variacao'],
+    ];
+
     public function export(Request $request) {
         $validator = Validator::make($request->all(), [
             'ean' => 'nullable|string|max:15',
             'descricao' => 'nullable|string|max:255',
             'farmacia' => 'nullable|string',
             'formato' => 'required|in:csv,excel',
-            'priceType' => 'required|in:current,historical',
+            'priceType' => 'required|in:current,historical,variation',
             'data-inicio' => 'nullable|date',
             'data-fim' => 'nullable|date',
         ]);
 
         if ($validator->fails()) {
             return response()->json(['error' => $validator->errors()], 400);
+        }
+
+        // Aumentos e reducoes tem filtros proprios e outra linha; dos outros
+        // dois relatorios so compartilha o formato de saida.
+        if ($request->query('priceType') === 'variation') {
+            return $this->exportarVariacoes($request);
         }
 
         $ean = $request->query('ean');
@@ -104,9 +140,9 @@ class ReportController extends Controller
             $query->orderBy('p.preco', 'asc');
 
             if ($formato === 'csv') {
-                return $this->streamCSV($query);
+                return $this->streamCSV($query, self::COLUNAS_PRECO, 'relatorio');
             } else {
-                return $this->streamExcel($query);
+                return $this->streamExcel($query, self::COLUNAS_PRECO, 'relatorio');
             }
         } catch (\Exception $e) {
             Log::error('Erro ao exportar dados', ['message' => $e->getMessage()]);
@@ -127,8 +163,8 @@ class ReportController extends Controller
      * `cursor()` faz exatamente essa consulta unica e vai entregando linha a
      * linha. E a diferenca entre O(n²) e O(n), nao uma economia de constante.
      */
-    private function streamCSV($query) {
-        $filename = 'relatorio_' . date('Y-m-d_His') . '.csv';
+    private function streamCSV($query, array $colunas, string $prefixo) {
+        $filename = $prefixo . '_' . date('Y-m-d_His') . '.csv';
 
         $headers = [
             'Content-Type' => 'text/csv; charset=UTF-8',
@@ -144,25 +180,19 @@ class ReportController extends Controller
             // no fio, antes e depois desta mudanca.
         ];
 
-        return response()->stream(function () use ($query) {
+        return response()->stream(function () use ($query, $colunas) {
             $handle = fopen('php://output', 'w');
 
             // BOM for Excel UTF-8 compatibility
             fprintf($handle, chr(0xEF) . chr(0xBB) . chr(0xBF));
 
-            fputcsv($handle, ['Farmácia', 'Descrição', 'Laboratório', 'EAN', 'Preço', 'Data']);
-
-            $clean = fn ($v) => preg_replace('/[\r\n]+/', ' ', trim((string) $v));
+            fputcsv($handle, array_column($colunas, 0));
 
             foreach ($query->cursor() as $item) {
-                fputcsv($handle, [
-                    $clean($item->nome_farmacia),
-                    $clean($item->descricao),
-                    $clean($item->laboratorio ?? ''),
-                    "\t" . $item->EAN,
-                    number_format((float) $item->preco, 2, '.', ''),
-                    date('d/m/Y', strtotime($item->data))
-                ]);
+                fputcsv($handle, array_map(
+                    fn ($coluna) => $this->valorCsv($coluna[2], $item->{$coluna[3]} ?? null),
+                    $colunas
+                ));
             }
 
             fclose($handle);
@@ -182,8 +212,8 @@ class ReportController extends Controller
      * linha anterior. Memoria constante, e nada da planilha precisa existir ao
      * mesmo tempo.
      */
-    private function streamExcel($query) {
-        $filename = 'relatorio_' . date('Y-m-d_His') . '.xlsx';
+    private function streamExcel($query, array $colunas, string $prefixo) {
+        $filename = $prefixo . '_' . date('Y-m-d_His') . '.xlsx';
 
         $headers = [
             'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -191,14 +221,12 @@ class ReportController extends Controller
             'Cache-Control' => 'no-cache, no-store, must-revalidate',
         ];
 
-        return response()->stream(function () use ($query) {
+        return response()->stream(function () use ($query, $colunas) {
             $opcoes = new XlsxOptions();
 
-            // Colunas indexadas a partir de 1 (A = 1). Larguras tiradas do
-            // conteudo real: descricao e o campo longo, EAN tem 13 digitos,
-            // preco e data sao curtos.
-            foreach ([1 => 16, 2 => 60, 3 => 24, 4 => 16, 5 => 12, 6 => 12] as $coluna => $largura) {
-                $opcoes->setColumnWidth((float) $largura, $coluna);
+            // Colunas indexadas a partir de 1 (A = 1).
+            foreach ($colunas as $indice => $coluna) {
+                $opcoes->setColumnWidth((float) $coluna[1], $indice + 1);
             }
 
             $writer = new XlsxWriter($opcoes);
@@ -207,29 +235,70 @@ class ReportController extends Controller
             $writer->openToFile('php://output');
 
             $writer->addRow(Row::fromValuesWithStyle(
-                ['Farmácia', 'Descrição', 'Laboratório', 'EAN', 'Preço', 'Data'],
+                array_column($colunas, 0),
                 (new Style())->withFontBold(true)
             ));
 
-            $estiloPreco = (new Style())->withFormat('#,##0.00');
+            $estilos = [
+                'preco'      => (new Style())->withFormat('#,##0.00'),
+                // Sinal explicito: numa coluna que mistura altas e quedas, o
+                // "+" e o que separa as duas numa olhada.
+                'percentual' => (new Style())->withFormat('+0.00;-0.00;0.00'),
+            ];
 
             foreach ($query->cursor() as $item) {
-                $writer->addRow(new Row([
-                    Cell::fromValue($item->nome_farmacia),
-                    Cell::fromValue($item->descricao),
-                    Cell::fromValue($item->laboratorio ?? ''),
-                    // O EAN chega do banco como string, e o OpenSpout so cria
-                    // celula numerica a partir de int/float de verdade. Entao
-                    // ele fica texto sozinho, sem precisar do prefixo de
-                    // tabulacao que o CSV usa para impedir o Excel de mostrar
-                    // 7,896E+12 no lugar do codigo.
-                    Cell::fromValue($item->EAN),
-                    Cell::fromValue((float) $item->preco, $estiloPreco),
-                    Cell::fromValue(date('d/m/Y', strtotime($item->data))),
-                ]));
+                $writer->addRow(new Row(array_map(
+                    fn ($coluna) => $this->celulaExcel($coluna[2], $item->{$coluna[3]} ?? null, $estilos),
+                    $colunas
+                )));
             }
 
             $writer->close();
         }, 200, $headers);
+    }
+
+    private function exportarVariacoes(Request $request)
+    {
+        $validator = VariacaoPreco::validador($request);
+
+        if ($validator->fails()) {
+            return response()->json(['error' => $validator->errors()], 400);
+        }
+
+        $query = VariacaoPreco::consulta(VariacaoPreco::filtros($request));
+
+        return $request->query('formato') === 'csv'
+            ? $this->streamCSV($query, self::COLUNAS_VARIACAO, 'relatorio_variacoes')
+            : $this->streamExcel($query, self::COLUNAS_VARIACAO, 'relatorio_variacoes');
+    }
+
+    private function valorCsv(string $tipo, $valor): string
+    {
+        return match ($tipo) {
+            // Tabulacao na frente para o Excel nao mostrar 7,896E+12 no lugar
+            // do codigo ao abrir o CSV.
+            'ean'                 => "\t" . $valor,
+            'preco', 'percentual' => $valor === null ? '' : number_format((float) $valor, 2, '.', ''),
+            'data'                => $valor ? date('d/m/Y', strtotime($valor)) : '',
+            default               => preg_replace('/[\r\n]+/', ' ', trim((string) $valor)),
+        };
+    }
+
+    /** @param  array<string, Style>  $estilos */
+    private function celulaExcel(string $tipo, $valor, array $estilos): Cell
+    {
+        if ($valor === null) {
+            return Cell::fromValue('');
+        }
+
+        return match ($tipo) {
+            'preco', 'percentual' => Cell::fromValue((float) $valor, $estilos[$tipo]),
+            'data'                => Cell::fromValue(date('d/m/Y', strtotime($valor))),
+            // O EAN chega do banco como string, e o OpenSpout so cria celula
+            // numerica a partir de int/float de verdade. Entao ele fica texto
+            // sozinho, sem precisar do prefixo de tabulacao do CSV.
+            'ean'                 => Cell::fromValue((string) $valor),
+            default               => Cell::fromValue($valor),
+        };
     }
 }
