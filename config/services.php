@@ -24,6 +24,12 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    // Token que os scrapers mandam no cabecalho X-Api-Token para as rotas de
+    // escrita (ver App\Http\Middleware\ExigeTokenColeta).
+    'coleta' => [
+        'token' => env('COLETA_TOKEN'),
+    ],
+
     'resend' => [
         'key' => env('RESEND_KEY'),
     ],

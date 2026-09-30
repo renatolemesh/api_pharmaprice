@@ -16,6 +16,8 @@ return Application::configure(basePath: dirname(__DIR__))
         // nele, o Laravel enxerga toda requisicao como http vinda do IP do
         // proxy: URLs geradas saem em http e o IP real some dos logs.
         $middleware->trustProxies(at: '*');
+
+        $middleware->alias(['token.coleta' => \App\Http\Middleware\ExigeTokenColeta::class]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //

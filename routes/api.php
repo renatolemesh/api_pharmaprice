@@ -11,6 +11,7 @@ use App\Http\Controllers\PrecoController;
 use App\Http\Controllers\HistoricoController;
 use App\Http\Controllers\ProdutoController;
 use App\Http\Controllers\InformacoesProdutoController;
+use App\Http\Controllers\LaboratorioLoteController;
 use App\Http\Controllers\LinkController;
 use App\Http\Controllers\MercadoController;
 use App\Http\Controllers\ReportController;
@@ -23,6 +24,10 @@ Route::post('/login', [AuthController::class, 'login']);
 Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
+
+// Toda rota que ESCREVE leva ->middleware('token.coleta'): exige o cabecalho
+// X-Api-Token dos scrapers (App\Http\Middleware\ExigeTokenColeta). Leitura e
+// login ficam abertos - e so isso que o front usa.
 
 // id, nome e dominio de cada farmacia. Evita mapa fixo no consumidor.
 Route::get('/farmacias', [FarmaciaController::class, 'index']);
@@ -37,25 +42,28 @@ Route::get('/precos/variacoes', [VariacaoController::class, 'index']);
 // Cadastro de produto novo em lote. Substitui as tres chamadas por item
 // (GET /produtos?ean= + POST /produtos + PUT /informacoes_produtos) que faziam
 // uma rodada de 378 produtos novos custar 1.134 requisicoes.
-Route::post('/produtos/lote', [CadastroLoteController::class, 'store']);
-Route::post('/produtos', [ProdutoController::class, 'store']);
+Route::post('/produtos/lote', [CadastroLoteController::class, 'store'])->middleware('token.coleta');
+// Correcao de laboratorio em lote (python -m webscrap marcas). Antes o campo so
+// era gravado no cadastro, e o que entrava errado ficava errado.
+Route::put('/produtos/laboratorio', [LaboratorioLoteController::class, 'update'])->middleware('token.coleta');
+Route::post('/produtos', [ProdutoController::class, 'store'])->middleware('token.coleta');
 Route::get('/produtos', [ProdutoController::class, 'index']);
 Route::get('/produtos/all', [ProdutoController::class, 'indexAll']);
-Route::post('/informacoes_produtos', [InformacoesProdutoController::class, 'store']);
-Route::put('/informacoes_produtos', [InformacoesProdutoController::class, 'upsert']);
+Route::post('/informacoes_produtos', [InformacoesProdutoController::class, 'store'])->middleware('token.coleta');
+Route::put('/informacoes_produtos', [InformacoesProdutoController::class, 'upsert'])->middleware('token.coleta');
 Route::get('/informacoes_produtos', [InformacoesProdutoController::class, 'index']);
 Route::get('/informacoes_produtos/all', [InformacoesProdutoController::class, 'indexAll']);
-Route::post('/precos', [PrecoController::class, 'store']);
+Route::post('/precos', [PrecoController::class, 'store'])->middleware('token.coleta');
 Route::get('preco_atual', [PrecoController::class, 'obterPrecoAtual']);
-Route::delete('/links', [LinkController::class, 'destroy']);
+Route::delete('/links', [LinkController::class, 'destroy'])->middleware('token.coleta');
 Route::get('/links', [LinkController::class, 'index']);
-Route::post('/links', [LinkController::class, 'store']);
+Route::post('/links', [LinkController::class, 'store'])->middleware('token.coleta');
 Route::get('/descricoes', [DescricaoController::class, 'index']);
 
 // Heartbeat de coleta: o scraper reporta tudo que viu, e nao so o que mudou.
-Route::post('/coletas', [ColetaController::class, 'store']);
-Route::post('/coletas/execucoes', [ColetaController::class, 'iniciarExecucao']);
-Route::patch('/coletas/execucoes/{execucaoId}', [ColetaController::class, 'finalizarExecucao']);
+Route::post('/coletas', [ColetaController::class, 'store'])->middleware('token.coleta');
+Route::post('/coletas/execucoes', [ColetaController::class, 'iniciarExecucao'])->middleware('token.coleta');
+Route::patch('/coletas/execucoes/{execucaoId}', [ColetaController::class, 'finalizarExecucao'])->middleware('token.coleta');
 Route::get('/coletas/saude', [ColetaController::class, 'saude']);
 
 Route::get('/report/export', [ReportController::class, 'export']);
@@ -73,7 +81,7 @@ Route::prefix('dashboard')->group(function () {
     Route::get('/top-changes', [DashboardController::class, 'getTopPriceChanges']);
     Route::get('/pharmacy-stats', [DashboardController::class, 'getPharmacyStats']);
     Route::get('/summary', [DashboardController::class, 'getSummary']); // Optional: all-in-one
-    Route::post('/cache/clear', [DashboardController::class, 'clearCache']);
+    Route::post('/cache/clear', [DashboardController::class, 'clearCache'])->middleware('token.coleta');
 });
 
 
