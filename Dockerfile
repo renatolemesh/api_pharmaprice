@@ -1,4 +1,4 @@
-FROM php:8.3-fpm
+FROM php:8.4-fpm
 
 # set your user name, ex: user=carlos
 ARG user=suporte
