@@ -28,6 +28,10 @@ return [
     // escrita (ver App\Http\Middleware\ExigeTokenColeta).
     'coleta' => [
         'token' => env('COLETA_TOKEN'),
+        // Liga a desativacao diaria de produtos sem coleta ha 30 dias
+        // (coletas:desativar-obsoletos no agendador). Desligada ate alguem
+        // olhar o --dry-run e concordar com o numero.
+        'desativar_automatico' => (bool) env('COLETA_DESATIVAR_AUTOMATICO', false),
     ],
 
     'resend' => [
