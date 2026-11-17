@@ -7,6 +7,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CadastroLoteController;
 use App\Http\Controllers\ColetaController;
 use App\Http\Controllers\FarmaciaController;
+use App\Http\Controllers\GrupoController;
 use App\Http\Controllers\PrecoController;
 use App\Http\Controllers\HistoricoController;
 use App\Http\Controllers\ProdutoController;
@@ -33,6 +34,9 @@ Route::get('/user', function (Request $request) {
 Route::get('/farmacias', [FarmaciaController::class, 'index']);
 
 Route::get('/precos', [PrecoController::class, 'consultar']);
+// Grupos de medicamentos (classe terapeutica da CMED) que um texto alcanca:
+// ?q=gripe devolve os antigripais. O codigo devolvido vai em /precos?grupo=.
+Route::get('/grupos', [GrupoController::class, 'index']);
 // Preco de mercado de uma lista de EANs, para o comparador de tabela propria.
 // So trafega codigo de barras: o preco de quem pergunta fica no navegador dele.
 Route::post('/precos/mercado', [MercadoController::class, 'lote']);

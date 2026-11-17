@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\Preco;
+use App\Support\GrupoCmed;
 use App\Support\PrecoAtual;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
@@ -17,6 +18,7 @@ class PrecoController extends Controller
             'ean' => 'nullable|string|max:15',
             'descricao' => 'nullable|string|max:255',
             'farmacia' => 'nullable|string',
+            'grupo' => 'nullable|string|max:100',
             'page' => 'nullable|integer|min:1',
             'per_page' => 'nullable|integer|min:1|max:100'
         ]);
@@ -28,6 +30,12 @@ class PrecoController extends Controller
         $ean = $request->query('ean');
         $descricao = $request->query('descricao');
         $farmacia = $request->query('farmacia');
+        // Codigos de classe da CMED, separados por virgula ("R5A,R5C").
+        $grupos = array_values(array_filter(array_map(
+            fn ($codigo) => strtoupper(trim($codigo)),
+            explode(',', (string) $request->query('grupo'))
+        )));
+        $incluirGrupos = $request->query->has('incluir_grupos');
         $noPaginate = $request->query->has('no_paginate');
         $incluirInativos = $request->query->has('incluir_inativos');
         $perPage = $request->query('per_page', 100);
@@ -43,10 +51,15 @@ class PrecoController extends Controller
                 $join->on('prod.produto_id', '=', 'ip.produto_id')
                     ->on('p.farmacia_id', '=', 'ip.farmacia_id');
             })
+            // Classe terapeutica, quando o EAN esta na lista da CMED. E o que
+            // sustenta a busca por grupo; produto fora da lista segue normal,
+            // com `grupo` nulo.
+            ->leftJoin('cmed_medicamentos as cm', 'cm.ean', '=', 'prod.EAN')
             ->select([
                 'prod.descricao',
                 'prod.EAN',
                 'prod.laboratorio',
+                'cm.classe_codigo as grupo',
                 'f.nome_farmacia',
                 // Dominio da farmacia. `ip.link` guarda caminho, nao URL, e sem
                 // isto quem consome tem que adivinhar o dominio por nome de
@@ -76,10 +89,40 @@ class PrecoController extends Controller
         if ($ean) {
             $query->where('prod.EAN', $ean);
         } elseif ($descricao) {
-            $query->where('prod.descricao', 'like', '%' . $descricao . '%');
+            // Com `incluir_grupos`, o texto vale tambem como nome de grupo:
+            // "gripe" traz o que tem gripe na descricao E os antigripais, que
+            // na maioria nao tem (Resfenol, Naldecon, Coristina).
+            $codigos = $incluirGrupos ? GrupoCmed::codigosPara($descricao) : [];
+
+            if ($codigos) {
+                // Uniao dos dois conjuntos de produto, juntada como tabela
+                // derivada. O caminho obvio - `descricao LIKE ... OR
+                // cm.classe_codigo IN (...)` - impede o MySQL de usar qualquer
+                // dos dois lados como filtro e varre tudo: 1s para "gripe".
+                // Assim custa o mesmo que o LIKE sozinho (56ms x 62ms, medido).
+                $alvo = DB::table('produtos')
+                    ->select('produto_id')
+                    ->where('descricao', 'like', '%' . $descricao . '%')
+                    ->union(
+                        DB::table('cmed_medicamentos as m')
+                            ->join('produtos as p2', 'p2.EAN', '=', 'm.ean')
+                            ->whereIn('m.classe_codigo', $codigos)
+                            ->select('p2.produto_id')
+                    );
+
+                $query->joinSub($alvo, 'alvo', 'alvo.produto_id', '=', 'prod.produto_id');
+            } else {
+                $query->where('prod.descricao', 'like', '%' . $descricao . '%');
+            }
         } elseif ($farmacia) {
             $farmaciaIds = array_map('intval', preg_split('/[\s+,;]+/', $farmacia));
             $query->whereIn('f.farmacia_id', $farmaciaIds);
+        }
+
+        // Fora da cadeia acima de proposito: `grupo` combina com os outros
+        // filtros ("so os antigripais da farmacia 3").
+        if ($grupos) {
+            $query->whereIn('cm.classe_codigo', $grupos);
         }
 
         $query->orderBy('p.preco', 'asc');
