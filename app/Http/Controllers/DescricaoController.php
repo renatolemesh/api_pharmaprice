@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Support\BuscaSimilar;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Http\Request;
@@ -24,6 +25,22 @@ class DescricaoController extends Controller
     public function index(Request $request)
     {
         $query = $request->query('descricao');
+
+        // Mesma regra de /precos?modo=similar: as sugestoes tem que ser as
+        // descricoes que a busca vai encontrar, senao a lista promete o que a
+        // pesquisa nao entrega.
+        if ($request->query('modo') === 'similar' && trim((string) $query) !== '') {
+            $similares = Cache::remember(
+                'produtos_descricao_similar_' . md5((string) $query),
+                60 * 24,
+                fn () => BuscaSimilar::descricoes((string) $query, self::LIMITE)
+            );
+
+            // null = indice fora do ar; segue para o LIKE.
+            if ($similares !== null) {
+                return response()->json(array_map(fn ($d) => ['descricao' => $d], $similares));
+            }
+        }
 
         $cacheKey = 'produtos_descricao_' . md5((string) $query);
 

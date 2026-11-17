@@ -80,7 +80,14 @@ class GrupoCmed
      */
     public static function codigosPara(string $texto): array
     {
-        $texto = self::normalizar($texto);
+        // "remedio para gripe", "medicamento pra dor de cabeca": o que vem
+        // depois e o grupo. So o comeco sai - "de" no meio de "dor de cabeca"
+        // faz parte do termo.
+        $texto = preg_replace(
+            '/^(remedios?|medicamentos?)\s+((para|pra|contra|de)\s+)?|^(para|pra|contra)\s+/',
+            '',
+            self::normalizar($texto)
+        );
         if ($texto === '') {
             return [];
         }

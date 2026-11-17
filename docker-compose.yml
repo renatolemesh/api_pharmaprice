@@ -10,6 +10,7 @@ services:
             - ./:/var/www
         depends_on:
             - redis
+            - busca
         networks:
             - laravel
         environment:
@@ -69,6 +70,25 @@ services:
         # o efeito nao seria "sem cache": seriam erros de conexao no primeiro
         # acesso, num servidor que acabou de subir e aparenta estar bem.
         restart: unless-stopped
+        networks:
+            - laravel
+
+    # Indice de busca por similaridade (pg_trgm). So uma copia de produto_id +
+    # descricao: a fonte de verdade continua no MySQL, e este banco pode ser
+    # apagado e reconstruido com `php artisan busca:sincronizar --completo`.
+    # Imagem com pgvector para a busca vetorial entrar depois sem trocar nada.
+    busca:
+        image: pgvector/pgvector:pg17
+        restart: unless-stopped
+        environment:
+            POSTGRES_DB: ${DB_BUSCA_DATABASE:-busca}
+            POSTGRES_USER: ${DB_BUSCA_USERNAME:-busca}
+            POSTGRES_PASSWORD: ${DB_BUSCA_PASSWORD}
+        # Servidor compartilhado: o indice de 107 mil descricoes ocupa ~25 MB,
+        # e os padroes do Postgres reservariam memoria para muito mais.
+        command: postgres -c shared_buffers=64MB -c max_connections=30 -c work_mem=8MB
+        volumes:
+            - ./.docker/busca:/var/lib/postgresql/data
         networks:
             - laravel
 

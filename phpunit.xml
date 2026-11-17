@@ -35,6 +35,11 @@
               GRANT ALL PRIVILEGES ON webscrap_test.* TO 'suporte'@'%';
         -->
         <env name="DB_DATABASE" value="webscrap_test"/>
+        <!--
+            Indice de busca dos testes, no mesmo container `busca`. Criar uma vez:
+              docker compose exec busca createdb -U busca busca_test
+        -->
+        <env name="DB_BUSCA_DATABASE" value="busca_test"/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="PULSE_ENABLED" value="false"/>
         <env name="QUEUE_CONNECTION" value="sync"/>

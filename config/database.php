@@ -59,6 +59,25 @@ return [
             ]) : [],
         ],
 
+        // Indice de busca por similaridade (App\Support\BuscaSimilar). Banco
+        // separado e descartavel: so guarda produto_id e descricao normalizada.
+        'busca' => [
+            'driver' => 'pgsql',
+            'host' => env('DB_BUSCA_HOST', 'busca'),
+            'port' => env('DB_BUSCA_PORT', '5432'),
+            'database' => env('DB_BUSCA_DATABASE', 'busca'),
+            'username' => env('DB_BUSCA_USERNAME', 'busca'),
+            'password' => env('DB_BUSCA_PASSWORD', ''),
+            'charset' => 'utf8',
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'search_path' => 'public',
+            'sslmode' => 'prefer',
+            // Sem resposta em 2s, a busca cai para o LIKE em vez de travar a
+            // requisicao esperando um banco fora do ar.
+            'options' => [PDO::ATTR_TIMEOUT => 2],
+        ],
+
         'mariadb' => [
             'driver' => 'mariadb',
             'url' => env('DB_URL'),

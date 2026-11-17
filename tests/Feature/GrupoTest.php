@@ -94,6 +94,13 @@ class GrupoTest extends TestCase
         $this->assertSame(['N5B1'], GrupoCmed::codigosPara('dormir'));
     }
 
+    public function test_remedio_para_no_comeco_e_ignorado(): void
+    {
+        $this->assertSame(['R5A'], GrupoCmed::codigosPara('remédio para gripe'));
+        $this->assertSame(['N2B2'], GrupoCmed::codigosPara('medicamento pra dor de cabeça'));
+        $this->assertSame([], GrupoCmed::codigosPara('remédio'));
+    }
+
     public function test_acento_nao_importa(): void
     {
         $this->assertSame(['N2B2'], GrupoCmed::codigosPara('dor de cabeca'));

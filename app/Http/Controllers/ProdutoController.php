@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\Produto;
+use App\Support\BuscaSimilar;
 
 class ProdutoController extends Controller
 {
@@ -29,6 +30,8 @@ class ProdutoController extends Controller
         ]);
 
         $produto = Produto::create($validatedData);
+
+        BuscaSimilar::sincronizarSemFalhar();
 
         return response()->json($produto, 201);
     }

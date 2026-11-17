@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y \
     libzip-dev \
     zlib1g-dev \
     libjpeg-dev \
-    libfreetype6-dev \
+    libfreetype6-dev     libpq-dev \
     zip \
     unzip
 
@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y \
 RUN docker-php-ext-configure gd --with-freetype --with-jpeg
 
 # Install PHP extensions
-RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd sockets zip
+RUN docker-php-ext-install pdo_mysql pdo_pgsql mbstring exif pcntl bcmath gd sockets zip
 
 # Clear cache
 RUN apt-get clean && rm -rf /var/lib/apt/lists/*
