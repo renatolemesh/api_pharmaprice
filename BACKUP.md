@@ -58,8 +58,8 @@ docker compose exec -T db dropdb -U pharmaprice conferencia
 Porta e Adminer so escutam em 127.0.0.1 no servidor. Por tunel SSH:
 
 ```bash
-ssh -L 5433:127.0.0.1:5433 -L 8080:127.0.0.1:8080 root@servidor
-# Postgres em localhost:5433, Adminer em http://localhost:8080
+ssh -L 5434:127.0.0.1:5434 -L 8080:127.0.0.1:8080 root@servidor
+# Postgres em localhost:5434, Adminer em http://localhost:8080
 ```
 
 ## Migracao do MySQL (novembro de 2026)

@@ -15,7 +15,7 @@
 # Adminer na internet mesmo com o firewall ativo. O acesso a esses dois e
 # por tunel SSH:
 #
-#     ssh -L 5433:127.0.0.1:5433 -L 8080:127.0.0.1:8080 root@servidor
+#     ssh -L 5434:127.0.0.1:5434 -L 8080:127.0.0.1:8080 root@servidor
 
 services:
     nginx:
@@ -30,8 +30,9 @@ services:
             - shared-net
 
     db:
+        # 5434 e nao 5433: neste servidor a 5433 e do banco do saybest.
         ports: !override
-            - "127.0.0.1:5433:5432"
+            - "127.0.0.1:5434:5432"
 
     adminer:
         ports: !override
