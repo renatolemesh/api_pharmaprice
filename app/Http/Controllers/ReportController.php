@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Support\FiltroDescricao;
 use App\Support\VariacaoPreco;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
@@ -49,6 +50,7 @@ class ReportController extends Controller
             'ean' => 'nullable|string|max:15',
             'descricao' => 'nullable|string|max:255',
             'farmacia' => 'nullable|string',
+            'modo' => 'nullable|in:similar',
             'formato' => 'required|in:csv,excel',
             'priceType' => 'required|in:current,historical,variation',
             'data-inicio' => 'nullable|date',
@@ -131,7 +133,9 @@ class ReportController extends Controller
             if ($ean) {
                 $query->where('prod.EAN', $ean);
             } elseif ($descricao) {
-                $query->where('prod.descricao', 'like', '%' . $descricao . '%');
+                // Mesma regra da busca, inclusive modo=similar e
+                // incluir_grupos: a planilha traz o que a tela mostrou.
+                FiltroDescricao::aplicar($query, $descricao, $request);
             } elseif ($farmacia) {
                 $farmaciaIds = array_map('intval', preg_split('/[\s+,;]+/', $farmacia));
                 $query->whereIn('f.farmacia_id', $farmaciaIds);

@@ -4,8 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\Preco;
-use App\Support\BuscaSimilar;
-use App\Support\GrupoCmed;
+use App\Support\FiltroDescricao;
 use App\Support\PrecoAtual;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
@@ -20,6 +19,7 @@ class PrecoController extends Controller
             'descricao' => 'nullable|string|max:255',
             'farmacia' => 'nullable|string',
             'grupo' => 'nullable|string|max:100',
+            // `modo=similar` e `incluir_grupos`: ver App\Support\FiltroDescricao.
             'modo' => 'nullable|in:similar',
             'page' => 'nullable|integer|min:1',
             'per_page' => 'nullable|integer|min:1|max:100'
@@ -37,10 +37,6 @@ class PrecoController extends Controller
             fn ($codigo) => strtoupper(trim($codigo)),
             explode(',', (string) $request->query('grupo'))
         )));
-        $incluirGrupos = $request->query->has('incluir_grupos');
-        // `modo=similar`: a descricao casa por semelhanca, nao por sequencia
-        // exata ("prot sol" acha "Protetor Solar"). Ver App\Support\BuscaSimilar.
-        $similar = $request->query('modo') === 'similar';
         $noPaginate = $request->query->has('no_paginate');
         $incluirInativos = $request->query->has('incluir_inativos');
         $perPage = $request->query('per_page', 100);
@@ -94,48 +90,7 @@ class PrecoController extends Controller
         if ($ean) {
             $query->where('prod.EAN', $ean);
         } elseif ($descricao) {
-            // Com `incluir_grupos`, o texto vale tambem como nome de grupo:
-            // "gripe" traz o que tem gripe na descricao E os antigripais, que
-            // na maioria nao tem (Resfenol, Naldecon, Coristina).
-            $codigos = $incluirGrupos ? GrupoCmed::codigosPara($descricao) : [];
-
-            // null quando o indice nao responde: cai no LIKE abaixo, e a
-            // busca fica mais estreita em vez de quebrar.
-            $similares = $similar ? BuscaSimilar::produtoIds($descricao) : null;
-
-            if ($similares !== null) {
-                // O indice esta em outro banco, entao o que volta e uma lista
-                // de IDs (no maximo BuscaSimilar::LIMITE_PRODUTOS). Os do grupo
-                // entram na mesma lista, num IN so.
-                if ($codigos) {
-                    $similares = array_merge($similares, DB::table('cmed_medicamentos as m')
-                        ->join('produtos as p2', 'p2.EAN', '=', 'm.ean')
-                        ->whereIn('m.classe_codigo', $codigos)
-                        ->pluck('p2.produto_id')
-                        ->all());
-                }
-
-                $query->whereIntegerInRaw('prod.produto_id', array_unique($similares));
-            } elseif ($codigos) {
-                // Uniao dos dois conjuntos de produto, juntada como tabela
-                // derivada. O caminho obvio - `descricao LIKE ... OR
-                // cm.classe_codigo IN (...)` - impede o MySQL de usar qualquer
-                // dos dois lados como filtro e varre tudo: 1s para "gripe".
-                // Assim custa o mesmo que o LIKE sozinho (56ms x 62ms, medido).
-                $alvo = DB::table('produtos')
-                    ->select('produto_id')
-                    ->where('descricao', 'like', '%' . $descricao . '%')
-                    ->union(
-                        DB::table('cmed_medicamentos as m')
-                            ->join('produtos as p2', 'p2.EAN', '=', 'm.ean')
-                            ->whereIn('m.classe_codigo', $codigos)
-                            ->select('p2.produto_id')
-                    );
-
-                $query->joinSub($alvo, 'alvo', 'alvo.produto_id', '=', 'prod.produto_id');
-            } else {
-                $query->where('prod.descricao', 'like', '%' . $descricao . '%');
-            }
+            FiltroDescricao::aplicar($query, $descricao, $request);
         } elseif ($farmacia) {
             $farmaciaIds = array_map('intval', preg_split('/[\s+,;]+/', $farmacia));
             $query->whereIn('f.farmacia_id', $farmaciaIds);

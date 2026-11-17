@@ -140,6 +140,17 @@ class BuscaSimilarTest extends TestCase
         $this->assertNotContains('Dipirona Sódica 500mg 10 comprimidos', $sugestoes);
     }
 
+    public function test_exportacao_traz_o_mesmo_que_a_tela(): void
+    {
+        $resposta = $this->get('/api/report/export?formato=csv&priceType=current&modo=similar&descricao=' . urlencode('prot sol fps 50'))
+            ->assertOk();
+
+        $csv = $resposta->streamedContent();
+        $this->assertStringContainsString('PROT SOLAR COPPERTONE', $csv);
+        $this->assertStringContainsString('Nivea Sun', $csv);
+        $this->assertStringNotContainsString('Episol', $csv);
+    }
+
     public function test_indice_fora_do_ar_cai_no_like(): void
     {
         Config::set('database.connections.busca.host', 'host-que-nao-existe.invalid');
