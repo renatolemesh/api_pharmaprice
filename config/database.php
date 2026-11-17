@@ -16,7 +16,7 @@ return [
     |
     */
 
-    'default' => env('DB_CONNECTION', 'sqlite'),
+    'default' => env('DB_CONNECTION', 'pgsql'),
 
     /*
     |--------------------------------------------------------------------------
@@ -59,23 +59,20 @@ return [
             ]) : [],
         ],
 
-        // Indice de busca por similaridade (App\Support\BuscaSimilar). Banco
-        // separado e descartavel: so guarda produto_id e descricao normalizada.
-        'busca' => [
-            'driver' => 'pgsql',
-            'host' => env('DB_BUSCA_HOST', 'busca'),
-            'port' => env('DB_BUSCA_PORT', '5432'),
-            'database' => env('DB_BUSCA_DATABASE', 'busca'),
-            'username' => env('DB_BUSCA_USERNAME', 'busca'),
-            'password' => env('DB_BUSCA_PASSWORD', ''),
-            'charset' => 'utf8',
+        // MySQL de antes da migracao para o Postgres. Lido so pelo comando
+        // `banco:copiar-do-mysql`; a aplicacao nao usa.
+        'mysql_legado' => [
+            'driver' => 'mysql',
+            'host' => env('MYSQL_LEGADO_HOST', 'mysql-legado'),
+            'port' => env('MYSQL_LEGADO_PORT', '3306'),
+            'database' => env('MYSQL_LEGADO_DATABASE', 'webscrap'),
+            'username' => env('MYSQL_LEGADO_USERNAME', 'root'),
+            'password' => env('MYSQL_LEGADO_PASSWORD', ''),
+            'charset' => 'utf8mb4',
+            'collation' => 'utf8mb4_unicode_ci',
             'prefix' => '',
-            'prefix_indexes' => true,
-            'search_path' => 'public',
-            'sslmode' => 'prefer',
-            // Sem resposta em 2s, a busca cai para o LIKE em vez de travar a
-            // requisicao esperando um banco fora do ar.
-            'options' => [PDO::ATTR_TIMEOUT => 2],
+            'strict' => true,
+            'engine' => null,
         ],
 
         'mariadb' => [

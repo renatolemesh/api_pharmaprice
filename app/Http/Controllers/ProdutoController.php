@@ -4,7 +4,6 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\Produto;
-use App\Support\BuscaSimilar;
 
 class ProdutoController extends Controller
 {
@@ -16,7 +15,7 @@ class ProdutoController extends Controller
             return response()->json(['error' => 'ean is required'], 400);
         }
 
-        $produto = Produto::where('ean', $ean)->get();
+        $produto = Produto::where('EAN', $ean)->get();
 
         return response()->json($produto);
     }
@@ -25,13 +24,17 @@ class ProdutoController extends Controller
     {
         $validatedData = $request->validate([
             'descricao' => 'required|string|max:255',
-            'ean' => 'required|numeric|unique:produtos,ean',
+            'ean' => 'required|numeric|unique:produtos,EAN',
             'laboratorio' => 'nullable|string|max:255',
         ]);
 
-        $produto = Produto::create($validatedData);
-
-        BuscaSimilar::sincronizarSemFalhar();
+        // A coluna e "EAN"; o MySQL aceitava `ean` por nao diferenciar
+        // maiusculas no nome de coluna, o Postgres nao.
+        $produto = Produto::create([
+            'descricao'   => $validatedData['descricao'],
+            'EAN'         => (string) $validatedData['ean'],
+            'laboratorio' => $validatedData['laboratorio'] ?? null,
+        ]);
 
         return response()->json($produto, 201);
     }

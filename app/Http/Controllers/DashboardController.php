@@ -204,7 +204,7 @@ class DashboardController extends Controller
                 AVG(((preco - preco_anterior) / NULLIF(preco_anterior, 0)) * 100) as average_variation,
                 SUM(CASE WHEN preco > preco_anterior THEN 1 ELSE 0 END) as price_increases,
                 SUM(CASE WHEN preco < preco_anterior THEN 1 ELSE 0 END) as price_decreases,
-                AVG(DATEDIFF(data, data_anterior)) as average_change_time
+                AVG(data - data_anterior) as average_change_time
             ')
             ->whereNotNull('preco_anterior')
             ->when($farmaciaId, fn ($q) => $q->where('farmacia_id', $farmaciaId))
@@ -313,7 +313,7 @@ class DashboardController extends Controller
                 ->join('farmacias as f', 'p.farmacia_id', '=', 'f.farmacia_id')
                 ->selectRaw("
                     prod.descricao as product_name,
-                    prod.EAN as ean,
+                    prod.\"EAN\" as ean,
                     f.nome_farmacia as pharmacy_name,
                     p.preco_anterior as previous_price,
                     p.preco as current_price,

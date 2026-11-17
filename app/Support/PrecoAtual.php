@@ -65,11 +65,11 @@ class PrecoAtual
                     GROUP BY farmacia_id, produto_id
                 ) ult ON p.preco_id = ult.max_id
                 WHERE p.preco IS NOT NULL
-                ON DUPLICATE KEY UPDATE
-                    preco         = VALUES(preco),
-                    data          = VALUES(data),
-                    preco_id      = VALUES(preco_id),
-                    atualizado_em = VALUES(atualizado_em)
+                ON CONFLICT (farmacia_id, produto_id) DO UPDATE SET
+                    preco         = EXCLUDED.preco,
+                    data          = EXCLUDED.data,
+                    preco_id      = EXCLUDED.preco_id,
+                    atualizado_em = EXCLUDED.atualizado_em
             ", $bind);
         }
 

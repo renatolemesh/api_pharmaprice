@@ -9,8 +9,8 @@ services:
         volumes:
             - ./:/var/www
         depends_on:
+            - db
             - redis
-            - busca
         networks:
             - laravel
         environment:
@@ -30,35 +30,58 @@ services:
         networks:
             - laravel
 
-    # db mysql
+    # Banco principal. Imagem com pgvector para a busca vetorial entrar depois
+    # sem trocar de imagem; hoje a busca por semelhanca usa pg_trgm, que vem no
+    # Postgres padrao.
     db:
-        image: mysql:8.0
-        platform: linux/x86_64
+        image: pgvector/pgvector:pg17
         restart: unless-stopped
         environment:
-            MYSQL_DATABASE: ${DB_DATABASE}
-            MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
-            MYSQL_PASSWORD: ${DB_PASSWORD}
-            MYSQL_USER: ${DB_USERNAME}
+            POSTGRES_DB: ${DB_DATABASE}
+            POSTGRES_USER: ${DB_USERNAME}
+            POSTGRES_PASSWORD: ${DB_PASSWORD}
+        # Servidor compartilhado (8 GB para varios projetos): a base tem ~1,5 GB
+        # e o padrao do Postgres (128 MB de cache) a leria do disco o tempo
+        # todo, enquanto o automatico de outros bancos pegaria a maquina toda.
+        command: >
+            postgres
+            -c shared_buffers=512MB
+            -c effective_cache_size=1536MB
+            -c work_mem=16MB
+            -c maintenance_work_mem=256MB
+            -c max_connections=50
+            -c random_page_cost=1.1
         volumes:
-            - ./.docker/mysql/dbdata:/var/lib/mysql
+            - ./.docker/postgres:/var/lib/postgresql/data
         ports:
-            - "3300:3306"
+            - "5433:5432"
         networks:
             - laravel
 
-    # PHPMyAdmin
-    phpmyadmin:
-        image: phpmyadmin/phpmyadmin
-        platform: linux/x86_64
+    # Adminer no lugar do phpMyAdmin: fala Postgres e ocupa uma fracao da
+    # memoria.
+    adminer:
+        image: adminer:4
         restart: unless-stopped
-        ports:
-            - "8080:80"
         environment:
-            PMA_HOST: db
-            PMA_PORT: 3306
-            UPLOAD_LIMIT: 300M
-            MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+            ADMINER_DEFAULT_SERVER: db
+        ports:
+            - "8080:8080"
+        networks:
+            - laravel
+
+    # MySQL antigo, so para a migracao e para voltar atras se preciso. Nao sobe
+    # com `docker compose up`; so com `--profile legado`. Os dados continuam
+    # onde sempre estiveram, e a senha e a que ja esta gravada neles (estas
+    # variaveis so valem para um volume vazio).
+    mysql-legado:
+        image: mysql:8.0
+        platform: linux/x86_64
+        profiles: ["legado"]
+        environment:
+            MYSQL_ROOT_PASSWORD: ${MYSQL_LEGADO_PASSWORD:-}
+        volumes:
+            - ./.docker/mysql/dbdata:/var/lib/mysql
         networks:
             - laravel
 
@@ -70,25 +93,6 @@ services:
         # o efeito nao seria "sem cache": seriam erros de conexao no primeiro
         # acesso, num servidor que acabou de subir e aparenta estar bem.
         restart: unless-stopped
-        networks:
-            - laravel
-
-    # Indice de busca por similaridade (pg_trgm). So uma copia de produto_id +
-    # descricao: a fonte de verdade continua no MySQL, e este banco pode ser
-    # apagado e reconstruido com `php artisan busca:sincronizar --completo`.
-    # Imagem com pgvector para a busca vetorial entrar depois sem trocar nada.
-    busca:
-        image: pgvector/pgvector:pg17
-        restart: unless-stopped
-        environment:
-            POSTGRES_DB: ${DB_BUSCA_DATABASE:-busca}
-            POSTGRES_USER: ${DB_BUSCA_USERNAME:-busca}
-            POSTGRES_PASSWORD: ${DB_BUSCA_PASSWORD}
-        # Servidor compartilhado: o indice de 107 mil descricoes ocupa ~25 MB,
-        # e os padroes do Postgres reservariam memoria para muito mais.
-        command: postgres -c shared_buffers=64MB -c max_connections=30 -c work_mem=8MB
-        volumes:
-            - ./.docker/busca:/var/lib/postgresql/data
         networks:
             - laravel
 

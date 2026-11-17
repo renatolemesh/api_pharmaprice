@@ -2,9 +2,8 @@
 
 namespace App\Support;
 
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
-use Throwable;
 
 /**
  * Busca por similaridade de texto, para achar o que o LIKE perde.
@@ -21,27 +20,18 @@ use Throwable;
  * Abreviacao e problema de grafia, nao de significado. Significado ("gripe"
  * achar Resfenol) e resolvido pelos grupos da CMED - ver GrupoCmed.
  *
- * O indice vive num Postgres a parte (conexao `busca`), com uma copia de
- * produto_id e descricao. Ele e descartavel: `busca:sincronizar --completo`
- * reconstroi tudo a partir do MySQL.
+ * Compara contra `produtos.texto_busca`, coluna gerada pelo proprio Postgres
+ * com normalizar_busca(descricao) e indexada com gin_trgm_ops (ver a migration
+ * do schema). Por ser gerada, nunca fica atrasada em relacao a descricao.
  */
 class BuscaSimilar
 {
-    public const CONEXAO = 'busca';
-
     /**
      * Similaridade minima de cada palavra. Calibrado na base: em 0,4,
      * "protetor" ainda alcanca "prot" (4 de 9 trigramas em comum); em 0,45
      * ja perdia parte dos abreviados.
      */
     private const LIMIAR = 0.4;
-
-    /**
-     * Teto de produtos devolvidos para a consulta de precos. Busca generica
-     * ("creme") casa dezenas de milhares; acima disto o resultado vira lista
-     * de IDs grande demais para o IN do MySQL, e ninguem pagina ate la.
-     */
-    public const LIMITE_PRODUTOS = 3000;
 
     /**
      * Palavras que nao filtram nada. Sem esta lista, "remedio para gripe"
@@ -53,150 +43,60 @@ class BuscaSimilar
         'remedio', 'remedios', 'medicamento', 'medicamentos',
     ];
 
-    private const TAMANHO_LOTE = 2000;
-
-    /** Cria a tabela e o indice, se faltarem. Idempotente. */
-    public static function garantirEsquema(): void
-    {
-        $db = DB::connection(self::CONEXAO);
-
-        $db->statement('CREATE EXTENSION IF NOT EXISTS pg_trgm');
-        $db->statement('
-            CREATE TABLE IF NOT EXISTS produtos_busca (
-                produto_id BIGINT PRIMARY KEY,
-                descricao  TEXT NOT NULL,
-                texto      TEXT NOT NULL
-            )
-        ');
-        $db->statement('
-            CREATE INDEX IF NOT EXISTS idx_produtos_busca_texto
-            ON produtos_busca USING gin (texto gin_trgm_ops)
-        ');
-    }
-
     /**
-     * Copia para o indice os produtos que ainda nao estao nele.
+     * Restringe a consulta aos produtos parecidos com o texto.
      *
-     * Incremental por produto_id: descricao so e escrita na criacao do
-     * produto, entao o que importa e o que entrou depois do ultimo id
-     * indexado. Se uma sincronizacao falhar, a proxima pega o atraso inteiro,
-     * porque parte do maior id que DE FATO chegou ao indice.
+     * Cada palavra vira `palavra <% texto_busca`, o operador que usa o indice
+     * GIN. Texto sem nenhuma palavra que filtre ("de", "a") nao acha nada, em
+     * vez de achar tudo.
      *
-     * Com $completo, apaga e refaz tudo - para carga manual no MySQL ou
-     * mudanca na normalizacao.
-     *
-     * @return int produtos indexados
+     * @param string $alias alias de `produtos` na consulta
      */
-    public static function sincronizar(bool $completo = false): int
+    public static function filtrar(Builder $query, string $alias, string $texto): void
     {
-        self::garantirEsquema();
-        $busca = DB::connection(self::CONEXAO);
+        $palavras = self::palavras($texto);
 
-        if ($completo) {
-            $busca->statement('TRUNCATE produtos_busca');
+        if (!$palavras) {
+            $query->whereRaw('false');
+            return;
         }
 
-        $ultimo = (int) $busca->table('produtos_busca')->max('produto_id');
-        $total = 0;
+        self::ajustarLimiar();
 
-        DB::table('produtos')
-            ->where('produto_id', '>', $ultimo)
-            ->whereNotNull('descricao')
-            ->where('descricao', '<>', '')
-            ->select('produto_id', 'descricao')
-            ->chunkById(self::TAMANHO_LOTE, function ($produtos) use ($busca, &$total) {
-                $linhas = [];
-                foreach ($produtos as $produto) {
-                    $linhas[] = [
-                        'produto_id' => $produto->produto_id,
-                        'descricao'  => $produto->descricao,
-                        'texto'      => self::normalizar($produto->descricao),
-                    ];
-                }
-                $busca->table('produtos_busca')->upsert($linhas, ['produto_id'], ['descricao', 'texto']);
-                $total += count($linhas);
-            }, 'produto_id');
-
-        return $total;
-    }
-
-    /**
-     * Versao que nao derruba quem chamou: para rodar logo depois de cadastrar
-     * produto. Indice fora do ar nao pode fazer o scraper perder o cadastro;
-     * o produto entra na proxima sincronizacao que der certo.
-     */
-    public static function sincronizarSemFalhar(): void
-    {
-        try {
-            self::sincronizar();
-        } catch (Throwable $e) {
-            Log::warning('Indice de busca nao sincronizado', ['erro' => $e->getMessage()]);
+        foreach ($palavras as $palavra) {
+            $query->whereRaw("? <% {$alias}.texto_busca", [$palavra]);
         }
-    }
-
-    /**
-     * IDs dos produtos parecidos com o texto, do mais parecido ao menos.
-     *
-     * Devolve null quando o indice nao responde, para quem chama cair no LIKE.
-     * Devolve [] quando o texto nao tem nenhuma palavra que filtre.
-     *
-     * @return int[]|null
-     */
-    public static function produtoIds(string $texto, int $limite = self::LIMITE_PRODUTOS): ?array
-    {
-        $linhas = self::consultar($texto, 'produto_id', $limite);
-
-        return $linhas === null ? null : array_map(fn ($l) => (int) $l->produto_id, $linhas);
     }
 
     /**
      * Descricoes parecidas com o texto, sem repetir, para o autocomplete.
      *
-     * @return string[]|null null quando o indice nao responde
-     */
-    public static function descricoes(string $texto, int $limite): ?array
-    {
-        $linhas = self::consultar($texto, 'descricao', $limite);
-
-        return $linhas === null ? null : array_map(fn ($l) => $l->descricao, $linhas);
-    }
-
-    /**
-     * Uma consulta por similaridade, agrupada pela coluna pedida.
-     *
-     * Cada palavra vira uma condicao `palavra <% texto` - o operador que usa o
-     * indice GIN. A ordem soma a similaridade de todas as palavras, e desempata
-     * pela descricao mais curta: entre "Dipirona 500mg" e "Kit Dipirona 500mg +
+     * A ordem soma a similaridade de todas as palavras e desempata pela
+     * descricao mais curta: entre "Dipirona 500mg" e "Kit Dipirona 500mg +
      * Termometro + Bolsa", quem buscou dipirona quer a primeira.
+     *
+     * @return string[]
      */
-    private static function consultar(string $texto, string $coluna, int $limite): ?array
+    public static function descricoes(string $texto, int $limite): array
     {
         $palavras = self::palavras($texto);
         if (!$palavras) {
             return [];
         }
 
-        $filtro = implode(' AND ', array_fill(0, count($palavras), '? <% texto'));
-        $nota = implode(' + ', array_fill(0, count($palavras), 'word_similarity(?, texto)'));
+        $query = DB::table('produtos as p')->whereNotNull('p.descricao');
+        self::filtrar($query, 'p', $texto);
 
-        try {
-            $db = DB::connection(self::CONEXAO);
-            // Por sessao, e o <% so usa o indice com o limiar ja ajustado.
-            $db->statement('SET pg_trgm.word_similarity_threshold = ' . self::LIMIAR);
+        $nota = implode(' + ', array_fill(0, count($palavras), 'word_similarity(?, p.texto_busca)'));
 
-            return $db->select(
-                "SELECT {$coluna}
-                 FROM produtos_busca
-                 WHERE {$filtro}
-                 GROUP BY {$coluna}
-                 ORDER BY MAX({$nota}) DESC, MIN(length(texto)), {$coluna}
-                 LIMIT ?",
-                [...$palavras, ...$palavras, $limite]
-            );
-        } catch (Throwable $e) {
-            Log::warning('Busca por similaridade indisponivel; usando LIKE', ['erro' => $e->getMessage()]);
-            return null;
-        }
+        return $query
+            ->groupBy('p.descricao')
+            ->orderByRaw("MAX({$nota}) DESC", $palavras)
+            ->orderByRaw('MIN(length(p.texto_busca))')
+            ->orderBy('p.descricao')
+            ->limit($limite)
+            ->pluck('p.descricao')
+            ->all();
     }
 
     /** Palavras do texto que filtram algo, ja normalizadas e sem repeticao. */
@@ -211,22 +111,26 @@ class BuscaSimilar
     }
 
     /**
-     * Forma comparavel de uma descricao.
-     *
-     * - entidades HTML decodificadas duas vezes: a base tem "&amp;amp;#039"
-     *   de scraper que escapou o que ja vinha escapado;
-     * - minusculas e sem acento;
-     * - pontuacao vira espaco ("prot." = "prot");
-     * - numero separado de letra ("fps50" = "fps 50", "200ml" = "200 ml"),
-     *   porque o site escreve de um jeito e quem busca, do outro.
+     * Forma comparavel de um texto: a mesma funcao do Postgres que gera
+     * `produtos.texto_busca`, para busca e descricao nunca divergirem.
      */
     public static function normalizar(string $texto): string
     {
-        $texto = html_entity_decode(html_entity_decode($texto, ENT_QUOTES | ENT_HTML5, 'UTF-8'), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $texto = GrupoCmed::normalizar($texto);
-        $texto = preg_replace('/[^a-z0-9]+/', ' ', $texto);
-        $texto = preg_replace('/(?<=[a-z])(?=\d)|(?<=\d)(?=[a-z])/', ' ', $texto);
+        return (string) DB::scalar('SELECT normalizar_busca(?)', [$texto]);
+    }
 
-        return trim(preg_replace('/\s+/', ' ', $texto));
+    /**
+     * O `<%` le o limiar da sessao, e so usa o indice com ele ja ajustado.
+     * Uma vez por conexao basta.
+     */
+    private static function ajustarLimiar(): void
+    {
+        static $conexao = null;
+
+        $pdo = DB::connection()->getPdo();
+        if ($conexao !== $pdo) {
+            DB::statement('SET pg_trgm.word_similarity_threshold = ' . self::LIMIAR);
+            $conexao = $pdo;
+        }
     }
 }

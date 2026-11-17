@@ -23,23 +23,17 @@
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="CACHE_STORE" value="array"/>
         <!--
-            Base separada, e nao sqlite em memoria: as migrations usam SQL
-            especifico de MySQL (CREATE OR REPLACE VIEW, INSERT ... ON
-            DUPLICATE KEY UPDATE, IN de tuplas), entao um sqlite testaria outra
-            coisa. E nao a `webscrap`: RefreshDatabase apagaria a restauracao de
-            producao usada para medir desempenho.
+            Base separada, e nao sqlite em memoria: o schema usa coisas do
+            Postgres (pg_trgm, unaccent, coluna gerada, ON CONFLICT, IN de
+            tuplas), entao um sqlite testaria outra coisa. E nao a base do
+            .env: RefreshDatabase apagaria a copia de producao usada para medir
+            desempenho.
 
             Criar uma vez:
-              CREATE DATABASE webscrap_test CHARACTER SET utf8mb4
-                COLLATE utf8mb4_unicode_ci;
-              GRANT ALL PRIVILEGES ON webscrap_test.* TO 'suporte'@'%';
+              docker compose exec db createdb -U pharmaprice pharmaprice_test
         -->
-        <env name="DB_DATABASE" value="webscrap_test"/>
-        <!--
-            Indice de busca dos testes, no mesmo container `busca`. Criar uma vez:
-              docker compose exec busca createdb -U busca busca_test
-        -->
-        <env name="DB_BUSCA_DATABASE" value="busca_test"/>
+        <env name="DB_CONNECTION" value="pgsql"/>
+        <env name="DB_DATABASE" value="pharmaprice_test"/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="PULSE_ENABLED" value="false"/>
         <env name="QUEUE_CONNECTION" value="sync"/>

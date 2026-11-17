@@ -20,8 +20,8 @@
 # derrubou a primeira tentativa de subir a stack.
 #
 #   nginx       -> http://localhost:8081   (somente HTTP no local)
-#   phpmyadmin  -> http://localhost:8082
-#   mysql       -> 127.0.0.1:3300
+#   adminer     -> http://localhost:8082
+#   postgres    -> 127.0.0.1:5433
 services:
     nginx:
         ports: !override
@@ -32,6 +32,6 @@ services:
             - ./:/var/www
             - ./docker/nginx-local/:/etc/nginx/conf.d/
 
-    phpmyadmin:
+    adminer:
         ports: !override
-            - "8082:80"
+            - "8082:8080"

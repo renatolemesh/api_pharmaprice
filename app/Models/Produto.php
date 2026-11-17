@@ -14,9 +14,12 @@ class Produto extends Model
 
     protected $fillable = [
         'descricao',
-        'ean',
+        'EAN',
         'laboratorio'
     ];
+
+    // Gerada pelo banco a partir da descricao, so para a busca.
+    protected $hidden = ['texto_busca'];
 
     public $timestamps = false;
 

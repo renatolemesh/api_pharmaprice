@@ -4,16 +4,15 @@ namespace Tests\Feature;
 
 use App\Support\BuscaSimilar;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 /**
  * Busca por similaridade: o que o LIKE perde ("prot sol" para "Protetor
- * Solar") tem que aparecer, e o indice fora do ar nao pode derrubar a busca.
+ * Solar") tem que aparecer, sem tirar do LIKE o que ele ja achava.
  *
- * Usa o Postgres de verdade (banco busca_test, ver phpunit.xml): o que esta em
- * teste e justamente o comportamento do pg_trgm.
+ * O que esta em teste e o comportamento do pg_trgm e da funcao
+ * normalizar_busca, entao roda no Postgres de verdade (ver phpunit.xml).
  */
 class BuscaSimilarTest extends TestCase
 {
@@ -25,9 +24,6 @@ class BuscaSimilarTest extends TestCase
     {
         parent::setUp();
 
-        BuscaSimilar::garantirEsquema();
-        DB::connection(BuscaSimilar::CONEXAO)->statement('TRUNCATE produtos_busca');
-
         $this->farmacia = DB::table('farmacias')->insertGetId([
             'nome_farmacia' => 'Testefarma',
             'url_base'      => 'https://exemplo.test',
@@ -38,8 +34,6 @@ class BuscaSimilarTest extends TestCase
         $this->produto('Protetor Solar Facial Episol FPS 30 40g', '7896015590123', 49.90);
         $this->produto('Dipirona Sódica 500mg 10 comprimidos', '7893333333333', 4.00);
         $this->produto('Shampoo Bed Head Gimme Grip 400ml', '7894444444444', 89.00);
-
-        BuscaSimilar::sincronizar();
     }
 
     private function produto(string $descricao, string $ean, float $preco): int
@@ -121,14 +115,32 @@ class BuscaSimilarTest extends TestCase
         );
     }
 
-    public function test_sincronizacao_incremental_pega_so_o_que_falta(): void
+    public function test_descricao_editada_vale_na_hora(): void
     {
-        $this->assertSame(0, BuscaSimilar::sincronizar());
+        // texto_busca e coluna gerada: nao existe indice para ficar atrasado.
+        DB::table('produtos')->where('EAN', '7893333333333')->update(['descricao' => 'Dipirona Monoidratada 1g']);
 
-        $this->produto('Fralda Pampers Confort Sec G 34 unidades', '7500435000001', 69.90);
+        $this->assertSame(
+            ['Dipirona Monoidratada 1g'],
+            $this->descricoes('/api/precos?modo=similar&descricao=' . urlencode('dipir monoidr'))
+        );
+    }
 
-        $this->assertSame(1, BuscaSimilar::sincronizar());
-        $this->assertSame(6, BuscaSimilar::sincronizar(completo: true));
+    public function test_like_ignora_maiuscula_acento_e_pontuacao(): void
+    {
+        // O MySQL fazia as duas primeiras pela collation; no Postgres e a
+        // normalizacao que garante.
+        $this->assertSame(['Dipirona Sódica 500mg 10 comprimidos'], $this->descricoes('/api/precos?descricao=DIPIRONA%20SODICA'));
+        $this->assertSame(['Dipirona Sódica 500mg 10 comprimidos'], $this->descricoes('/api/precos?descricao=' . urlencode('500 mg')));
+        $this->assertSame(
+            ['Protetor Solar Nivea Sun Protect &amp; Hidrata FPS50 200ml'],
+            $this->descricoes('/api/precos?descricao=' . urlencode('protect & hidrata'))
+        );
+    }
+
+    public function test_texto_sem_palavra_que_filtre_nao_acha_nada(): void
+    {
+        $this->assertSame([], $this->descricoes('/api/precos?modo=similar&descricao=de'));
     }
 
     public function test_autocomplete_similar(): void
@@ -149,30 +161,5 @@ class BuscaSimilarTest extends TestCase
         $this->assertStringContainsString('PROT SOLAR COPPERTONE', $csv);
         $this->assertStringContainsString('Nivea Sun', $csv);
         $this->assertStringNotContainsString('Episol', $csv);
-    }
-
-    public function test_indice_fora_do_ar_cai_no_like(): void
-    {
-        Config::set('database.connections.busca.host', 'host-que-nao-existe.invalid');
-        DB::purge(BuscaSimilar::CONEXAO);
-
-        $this->assertNull(BuscaSimilar::produtoIds('dipirona'));
-
-        // A busca responde, pelo LIKE, em vez de dar erro 500.
-        $this->assertSame(
-            ['Dipirona Sódica 500mg 10 comprimidos'],
-            $this->descricoes('/api/precos?modo=similar&descricao=dipirona')
-        );
-    }
-
-    public function test_cadastro_nao_falha_com_indice_fora_do_ar(): void
-    {
-        Config::set('database.connections.busca.host', 'host-que-nao-existe.invalid');
-        DB::purge(BuscaSimilar::CONEXAO);
-
-        $this->postJson('/api/produtos', [
-            'descricao' => 'Produto cadastrado com indice fora',
-            'ean'       => '7891010101011',
-        ])->assertCreated();
     }
 }

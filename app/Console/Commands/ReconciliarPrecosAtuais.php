@@ -51,8 +51,8 @@ class ReconciliarPrecosAtuais extends Command
                -- Valor tambem, e nao so o ponteiro: uma escrita direta por SQL
                -- pode estragar o preco mantendo o preco_id coerente, e a
                -- conferencia passaria batida.
-               OR NOT (a.preco <=> esperado.preco)
-               OR NOT (a.data  <=> esperado.data)
+               OR a.preco IS DISTINCT FROM esperado.preco
+               OR a.data  IS DISTINCT FROM esperado.data
         ')->total;
 
         $orfas = DB::selectOne('
@@ -64,9 +64,9 @@ class ReconciliarPrecosAtuais extends Command
         ')->total;
 
         // `preco_anterior` conferido contra a linha imediatamente anterior do
-        // mesmo par, por preco_id — o mesmo criterio da carga inicial. `<=>`
-        // porque a primeira mudanca de cada par tem anterior nulo dos dois
-        // lados, e `=` daria falso negativo nela.
+        // mesmo par, por preco_id — o mesmo criterio da carga inicial. `IS
+        // DISTINCT FROM` porque a primeira mudanca de cada par tem anterior
+        // nulo dos dois lados, e `<>` daria falso negativo nela.
         $anteriorErrado = DB::selectOne('
             SELECT COUNT(*) AS total
             FROM (
@@ -76,8 +76,8 @@ class ReconciliarPrecosAtuais extends Command
                 FROM precos
                 WINDOW w AS (PARTITION BY farmacia_id, produto_id ORDER BY preco_id)
             ) c
-            WHERE NOT (c.preco_anterior <=> c.esperado_preco)
-               OR NOT (c.data_anterior  <=> c.esperado_data)
+            WHERE c.preco_anterior IS DISTINCT FROM c.esperado_preco
+               OR c.data_anterior  IS DISTINCT FROM c.esperado_data
         ')->total;
 
         if ($divergentes === 0 && $orfas === 0 && $anteriorErrado === 0) {
@@ -98,10 +98,11 @@ class ReconciliarPrecosAtuais extends Command
             // Linha sem contrapartida em `precos` nao tem como ser corrigida
             // pelo upsert abaixo — some.
             DB::statement('
-                DELETE a FROM precos_atuais a
-                LEFT JOIN precos p
-                  ON p.farmacia_id = a.farmacia_id AND p.produto_id = a.produto_id
-                WHERE p.preco_id IS NULL
+                DELETE FROM precos_atuais a
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM precos p
+                    WHERE p.farmacia_id = a.farmacia_id AND p.produto_id = a.produto_id
+                )
             ');
 
             DB::statement('
@@ -116,11 +117,11 @@ class ReconciliarPrecosAtuais extends Command
                     GROUP BY farmacia_id, produto_id
                 ) ult ON p.preco_id = ult.max_id
                 WHERE p.preco IS NOT NULL
-                ON DUPLICATE KEY UPDATE
-                    preco         = VALUES(preco),
-                    data          = VALUES(data),
-                    preco_id      = VALUES(preco_id),
-                    atualizado_em = VALUES(atualizado_em)
+                ON CONFLICT (farmacia_id, produto_id) DO UPDATE SET
+                    preco         = EXCLUDED.preco,
+                    data          = EXCLUDED.data,
+                    preco_id      = EXCLUDED.preco_id,
+                    atualizado_em = EXCLUDED.atualizado_em
             ');
         });
 
@@ -138,6 +139,10 @@ class ReconciliarPrecosAtuais extends Command
      * resultado ser idêntico ao de um UPDATE único. Cortar por preco_id
      * partiria a série de um par ao meio e o primeiro item de cada pedaço
      * ficaria sem anterior.
+     *
+     * So reescreve a linha que esta errada: no Postgres todo UPDATE cria uma
+     * versao nova da linha, e regravar 2,8 milhoes de precos iguais so
+     * incharia a tabela.
      */
     private function corrigirPrecoAnterior(): void
     {
@@ -147,16 +152,19 @@ class ReconciliarPrecosAtuais extends Command
         for ($inicio = 1; $inicio <= $maxProduto; $inicio += $passo) {
             DB::statement('
                 UPDATE precos p
-                JOIN (
+                SET preco_anterior = ult.anterior_preco,
+                    data_anterior  = ult.anterior_data
+                FROM (
                     SELECT preco_id,
                            LAG(preco) OVER w AS anterior_preco,
                            LAG(data)  OVER w AS anterior_data
                     FROM precos
                     WHERE produto_id BETWEEN ? AND ?
                     WINDOW w AS (PARTITION BY farmacia_id, produto_id ORDER BY preco_id)
-                ) ult ON ult.preco_id = p.preco_id
-                SET p.preco_anterior = ult.anterior_preco,
-                    p.data_anterior  = ult.anterior_data
+                ) ult
+                WHERE ult.preco_id = p.preco_id
+                  AND (p.preco_anterior IS DISTINCT FROM ult.anterior_preco
+                       OR p.data_anterior IS DISTINCT FROM ult.anterior_data)
             ', [$inicio, $inicio + $passo - 1]);
         }
     }

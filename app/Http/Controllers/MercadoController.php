@@ -55,7 +55,7 @@ class MercadoController extends Controller
                 $join->on('ip.produto_id', '=', 'pa.produto_id')
                     ->on('ip.farmacia_id', '=', 'pa.farmacia_id');
             })
-            ->whereIn(DB::raw("TRIM(LEADING '0' FROM prod.EAN)"), array_keys($pedidos))
+            ->whereIn(DB::raw("TRIM(LEADING '0' FROM prod.\"EAN\")"), array_keys($pedidos))
             // Mesma regra da busca: produto que nenhuma coleta acha ha 30 dias
             // nao entra numa comparacao de preco atual.
             ->where(function ($q) {

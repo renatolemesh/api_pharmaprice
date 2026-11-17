@@ -4,7 +4,6 @@ namespace App\Http\Controllers;
 
 use App\Models\InformacoesProduto;
 use App\Models\Produto;
-use App\Support\BuscaSimilar;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -135,12 +134,6 @@ class CadastroLoteController extends Controller
         DB::table('produtos')->insertOrIgnore($novos);
 
         $recem = Produto::whereIn('EAN', $faltantes)->pluck('produto_id', 'EAN')->all();
-
-        // Produto novo entra ja no indice de busca por similaridade. Se o
-        // indice estiver fora, o cadastro segue e o atraso vai na proxima.
-        if ($recem) {
-            BuscaSimilar::sincronizarSemFalhar();
-        }
 
         return [
             'por_ean' => $porEan + $recem,

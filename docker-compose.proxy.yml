@@ -11,11 +11,11 @@
 # ela pelo nome do container - o mesmo padrao do jira-dashboard.
 #
 # Sobre os bindings em 127.0.0.1: neste host o Docker escreve direto no
-# iptables e CONTORNA o UFW, entao publicar em 0.0.0.0 exporia MySQL e
-# phpMyAdmin na internet mesmo com o firewall ativo. O acesso a esses dois e
+# iptables e CONTORNA o UFW, entao publicar em 0.0.0.0 exporia Postgres e
+# Adminer na internet mesmo com o firewall ativo. O acesso a esses dois e
 # por tunel SSH:
 #
-#     ssh -L 3300:127.0.0.1:3300 -L 8080:127.0.0.1:8080 root@servidor
+#     ssh -L 5433:127.0.0.1:5433 -L 8080:127.0.0.1:8080 root@servidor
 
 services:
     nginx:
@@ -31,11 +31,11 @@ services:
 
     db:
         ports: !override
-            - "127.0.0.1:3300:3306"
+            - "127.0.0.1:5433:5432"
 
-    phpmyadmin:
+    adminer:
         ports: !override
-            - "127.0.0.1:8080:80"
+            - "127.0.0.1:8080:8080"
 
 networks:
     shared-net:

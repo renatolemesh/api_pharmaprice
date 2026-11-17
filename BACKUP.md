@@ -1,158 +1,81 @@
-# Backup e restauracao
+# Banco, backup e restauracao
 
-O banco roda em container no host `172.31.254.150`, acessivel apenas por VPN.
-A estrategia e **push do proprio host** via `rclone`: o host nao depende de
-nenhuma maquina externa estar ligada e conectada na VPN para o backup do dia
-acontecer.
+O banco e Postgres 17 (servico `db` do `docker-compose.yml`, imagem
+`pgvector/pgvector:pg17`). Ate novembro de 2026 era MySQL 8; ver
+"Migracao do MySQL" no fim.
 
-Tres coisas precisam ser verdade para isso ser backup de verdade, e cada uma
-tem um mecanismo aqui:
+## Backup
 
-| Risco | Mecanismo |
-|---|---|
-| Dump truncado aceito como valido | `gzip -t` + marcador `Dump completed` + tamanho minimo |
-| Perda do host leva o backup junto | `rclone copy` para nuvem a cada execucao |
-| Backup para de rodar em silencio | Ping para healthcheck; ausencia de ping vira alerta |
-| Backup existe mas nao restaura | `restore_test.sh` mensal restaura de verdade e confere |
+Quem faz o backup e o servidor de coleta, nao este repositorio:
+`WebScrap/operacao/backup.sh`, no cron do root as 06:00. Ele roda `pg_dump`
+dentro do container `api_pharmaprice-db-1`, grava
+`/home/chatbot/backups/banco/pharmaprice_AAAA-MM-DD.sql.gz` e manda para o
+Google Drive (`gdrive:pharmaprice-backups`) com `rclone`.
 
----
+Um dump so e guardado se terminar com a linha
+`PostgreSQL database dump complete` e passar do tamanho minimo. Sem o marcador,
+o arquivo esta truncado e e apagado na hora, em vez de ficar parecendo backup.
 
-## Instalacao (uma vez, no host)
-
-```bash
-# 1. dependencias
-apt-get update && apt-get install -y rclone gnupg curl
-
-# 2. configurar o destino remoto (Backblaze B2 e o mais barato para isto;
-#    S3, Drive ou qualquer outro backend do rclone servem igual)
-rclone config
-#    -> n (new remote) -> nome: b2 -> escolher o provedor -> credenciais
-#    -> testar:  rclone lsd b2:
-
-# 3. senha de criptografia do backup
-openssl rand -base64 48 > /root/.pharmaprice_backup_pass
-chmod 600 /root/.pharmaprice_backup_pass
-```
-
-**Copie o conteudo de `/root/.pharmaprice_backup_pass` para fora do servidor
-agora** (gerenciador de senhas, cofre, papel na gaveta). Se essa senha existir
-apenas na maquina que o backup deveria proteger, o backup nao protege nada.
-
-```bash
-# 4. configuracao
-cd /home/api/api_pharmaprice
-cp backup.env.example backup.env
-chmod 600 backup.env
-nano backup.env          # ajustar RCLONE_REMOTE e caminhos
-
-chmod +x backup_db.sh restore_test.sh
-
-# 5. primeira execucao manual
-./backup_db.sh
-```
-
-## Agendamento
-
-```cron
-# crontab -e   (como root, no host)
-
-# Backup diario as 03:00. A camada (diario/semanal/mensal) e escolhida sozinha
-# pela data: dia 01 vira mensal, domingo vira semanal, o resto e diario.
-0 3 * * * /home/api/api_pharmaprice/backup_db.sh >> /home/api/api_pharmaprice/backups/cron.log 2>&1
-
-# Teste de restauracao no dia 5 de cada mes, as 04:00.
-0 4 5 * * /home/api/api_pharmaprice/restore_test.sh >> /home/api/api_pharmaprice/backups/restore.log 2>&1
-
-# Scheduler do Laravel (necessario para coletas:desativar-obsoletos rodar).
-* * * * * cd /home/api/api_pharmaprice && docker compose exec -T app php artisan schedule:run >> /dev/null 2>&1
-```
-
-## Monitoramento
-
-Crie dois checks em <https://healthchecks.io> (plano gratuito basta) e cole as
-URLs em `backup.env`:
-
-- `HEALTHCHECK_URL` — periodo diario, folga de 6h
-- `HEALTHCHECK_RESTORE_URL` — periodo mensal, folga de 3 dias
-
-O ponto nao e receber aviso quando o backup falha: o script ja loga isso. E
-receber aviso quando o backup **para de dar sinal** — servidor desligado, cron
-removido, disco cheio. Essa e a falha que passa despercebida por meses.
-
----
+`WebScrap/operacao/restaurar.sh` levanta tudo num servidor novo a partir
+desses backups.
 
 ## Restaurar
 
-### Conferir o que existe
+### Por cima da base de producao
 
 ```bash
-ls -lh backups/{diario,semanal,mensal}/
-rclone ls b2:pharmaprice-backups/          # copias remotas
-```
+cd /home/chatbot/pharmaprice/api_pharmaprice
 
-### Baixar do remoto (se o host se perdeu)
-
-```bash
-rclone copy b2:pharmaprice-backups/diario/webscrap_2026-08-14_03-00-01.sql.gz.gpg ./
-```
-
-### Restaurar por cima da base de producao
-
-```bash
-cd /home/api/api_pharmaprice
-
-# 1. parar quem escreve, para nao restaurar sobre gravacao concorrente
+# 1. parar quem escreve
 docker compose stop app nginx
 
-# 2. restaurar
-gpg --batch --decrypt --passphrase-file /root/.pharmaprice_backup_pass \
-    backups/diario/webscrap_2026-08-14_03-00-01.sql.gz.gpg \
-  | gzip -dc \
-  | docker compose exec -T db mysql -uroot -p"$SENHA" webscrap
+# 2. recriar o banco vazio e restaurar
+docker compose exec -T db sh -c 'dropdb -U "$POSTGRES_USER" "$POSTGRES_DB" && createdb -U "$POSTGRES_USER" "$POSTGRES_DB"'
+gunzip -c /home/chatbot/backups/banco/pharmaprice_AAAA-MM-DD.sql.gz \
+  | docker compose exec -T db sh -c 'psql -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 
 # 3. religar
 docker compose start app nginx
 ```
 
-Se o backup nao estiver cifrado, pule o `gpg` e comece direto no `gzip -dc`.
+`ON_ERROR_STOP=1` e o que faz uma restauracao com erro falhar: sem ele o
+`psql` segue em frente e sai com sucesso.
 
-### Restaurar em paralelo, sem tocar na producao
+### Em paralelo, sem tocar na producao
 
-```bash
-docker compose exec -T db mysql -uroot -p"$SENHA" -e "CREATE DATABASE webscrap_conferencia;"
-gpg --batch --decrypt --passphrase-file /root/.pharmaprice_backup_pass ARQUIVO.gpg \
-  | gzip -dc \
-  | docker compose exec -T db mysql -uroot -p"$SENHA" webscrap_conferencia
-```
-
-Use isto quando o objetivo for recuperar dados especificos (um preco apagado
-por engano, por exemplo) em vez de voltar a base inteira no tempo.
-
----
-
-## Teste de restauracao
+Para recuperar dados especificos (um preco apagado por engano, por exemplo):
 
 ```bash
-./restore_test.sh                      # backup mais recente
-./restore_test.sh backups/mensal/X.gz  # arquivo especifico
+docker compose exec -T db createdb -U pharmaprice conferencia
+gunzip -c ARQUIVO.sql.gz \
+  | docker compose exec -T db psql -q -v ON_ERROR_STOP=1 -U pharmaprice -d conferencia
+# ... consultar ...
+docker compose exec -T db dropdb -U pharmaprice conferencia
 ```
 
-Ele cria `webscrap_restore_teste`, restaura, compara a contagem de
-`produtos`, `precos`, `farmacias`, `informacoes_produtos` e `links` com a base
-viva, confere se as views voltaram, e derruba o banco de teste no fim.
+## Acesso ao banco
 
-Tabela abaixo de 90% da contagem viva reprova o teste. A base cresce entre o
-dump e o teste, entao restaurada menor que viva e normal; **muito** menor
-significa dump parcial.
+Porta e Adminer so escutam em 127.0.0.1 no servidor. Por tunel SSH:
 
----
+```bash
+ssh -L 5433:127.0.0.1:5433 -L 8080:127.0.0.1:8080 root@servidor
+# Postgres em localhost:5433, Adminer em http://localhost:8080
+```
 
-## Quando a base crescer
+## Migracao do MySQL (novembro de 2026)
 
-O dump comprimido tem ~23 MB hoje, e `precos` so cresce (uma linha por mudanca
-de preco). Quando o dump passar de uns 500 MB, valem duas mudancas:
+O schema do Postgres vem de `database/migrations/2026_11_18_000000_schema_pharmaprice.php`,
+que substituiu as migrations da epoca do MySQL. Os dados foram copiados com:
 
-1. subir `TAMANHO_MINIMO_BYTES` junto — o piso precisa acompanhar a base para
-   continuar detectando dump parcial;
-2. arquivar `precos` antigo (particionar por ano ou mover historico com mais de
-   N anos para uma tabela fria), em vez de dumpar tudo todo dia.
+```bash
+docker compose --profile legado up -d mysql-legado   # o MySQL antigo, com os dados de sempre
+docker compose exec app php artisan migrate --force
+docker compose exec app php artisan banco:copiar-do-mysql
+```
+
+O comando confere contagem de linhas e somas de preco tabela a tabela, e sai
+com erro se origem e destino nao baterem. `--conferir` repete so a conferencia.
+
+Os dados do MySQL continuam em `.docker/mysql/dbdata`. Backups de antes da
+migracao (`.sql.gz` terminando em `Dump completed`) so restauram num MySQL:
+subir o `mysql-legado`, restaurar nele e rodar `banco:copiar-do-mysql --substituir`.

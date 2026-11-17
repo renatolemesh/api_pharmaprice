@@ -24,52 +24,57 @@ class FiltroDescricao
     public static function aplicar(Builder $query, string $descricao, Request $request): void
     {
         $similar = $request->query('modo') === 'similar';
-        $incluirGrupos = $request->query->has('incluir_grupos');
 
         // Com `incluir_grupos`, o texto vale tambem como nome de grupo:
         // "gripe" traz o que tem gripe na descricao E os antigripais, que na
         // maioria nao tem (Resfenol, Naldecon, Coristina).
-        $codigos = $incluirGrupos ? GrupoCmed::codigosPara($descricao) : [];
+        $codigos = $request->query->has('incluir_grupos') ? GrupoCmed::codigosPara($descricao) : [];
 
-        // null quando o indice nao responde: cai no LIKE abaixo, e a busca fica
-        // mais estreita em vez de quebrar.
-        $similares = $similar ? BuscaSimilar::produtoIds($descricao) : null;
+        $porTexto = function (Builder $q, string $alias) use ($similar, $descricao) {
+            $similar
+                ? BuscaSimilar::filtrar($q, $alias, $descricao)
+                : self::contem($q, $alias, $descricao);
+        };
 
-        if ($similares !== null) {
-            // O indice esta em outro banco, entao o que volta e uma lista de
-            // IDs (no maximo BuscaSimilar::LIMITE_PRODUTOS). Os do grupo entram
-            // na mesma lista, num IN so.
-            if ($codigos) {
-                $similares = array_merge($similares, self::idsDosGrupos($codigos)->pluck('produto_id')->all());
-            }
-
-            $query->whereIntegerInRaw('prod.produto_id', array_unique($similares));
+        if (!$codigos) {
+            $porTexto($query, 'prod');
             return;
         }
 
-        if ($codigos) {
-            // Uniao dos dois conjuntos de produto, juntada como tabela
-            // derivada. O caminho obvio - `descricao LIKE ... OR
-            // cm.classe_codigo IN (...)` - impede o MySQL de usar qualquer dos
-            // dois lados como filtro e varre tudo: 1s para "gripe". Assim custa
-            // o mesmo que o LIKE sozinho (56ms x 62ms, medido).
-            $alvo = DB::table('produtos')
-                ->select('produto_id')
-                ->where('descricao', 'like', '%' . $descricao . '%')
-                ->union(self::idsDosGrupos($codigos));
+        // Uniao dos dois conjuntos de produto, juntada como tabela derivada.
+        // O caminho obvio - `texto OR classe IN (...)` - impede o banco de usar
+        // o indice de qualquer dos dois lados e varre a tabela inteira.
+        $porDescricao = DB::table('produtos as pt')->select('pt.produto_id');
+        $porTexto($porDescricao, 'pt');
 
-            $query->joinSub($alvo, 'alvo', 'alvo.produto_id', '=', 'prod.produto_id');
-            return;
-        }
+        $alvo = $porDescricao->union(
+            DB::table('cmed_medicamentos as m')
+                ->join('produtos as pg', 'pg.EAN', '=', 'm.ean')
+                ->whereIn('m.classe_codigo', $codigos)
+                ->select('pg.produto_id')
+        );
 
-        $query->where('prod.descricao', 'like', '%' . $descricao . '%');
+        $query->joinSub($alvo, 'alvo', 'alvo.produto_id', '=', 'prod.produto_id');
     }
 
-    private static function idsDosGrupos(array $codigos): Builder
+    /**
+     * Busca por trecho, sem diferenciar maiuscula, acento nem pontuacao:
+     * "dipirona sodica" acha "DIPIRONA SÓDICA", "500mg" acha "500 mg".
+     *
+     * O MySQL fazia as duas primeiras sozinho, pela collation
+     * utf8mb4_unicode_ci; no Postgres o LIKE diferencia tudo, entao a
+     * comparacao e entre as formas normalizadas. O indice de trigramas em
+     * `texto_busca` atende o LIKE com % dos dois lados, que no MySQL era
+     * varredura da tabela.
+     *
+     * @param string $alias alias de `produtos` na consulta
+     */
+    public static function contem(Builder $query, string $alias, string $texto): void
     {
-        return DB::table('cmed_medicamentos as m')
-            ->join('produtos as p2', 'p2.EAN', '=', 'm.ean')
-            ->whereIn('m.classe_codigo', $codigos)
-            ->select('p2.produto_id');
+        // So letras, numeros e espacos: os curingas % e _ que alguem digite
+        // ja sairam na normalizacao.
+        $termo = BuscaSimilar::normalizar($texto);
+
+        $query->where("{$alias}.texto_busca", 'like', '%' . $termo . '%');
     }
 }

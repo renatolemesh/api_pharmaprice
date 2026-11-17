@@ -56,8 +56,8 @@ class PrecoAnteriorTest extends TestCase
                 FROM precos
                 WINDOW w AS (PARTITION BY farmacia_id, produto_id ORDER BY preco_id)
             ) c
-            WHERE NOT (c.preco_anterior <=> c.esperado_preco)
-               OR NOT (c.data_anterior  <=> c.esperado_data)
+            WHERE c.preco_anterior IS DISTINCT FROM c.esperado_preco
+               OR c.data_anterior  IS DISTINCT FROM c.esperado_data
         ')->total;
 
         $this->assertSame(0, (int) $errados, 'preco_anterior divergiu do log em precos');

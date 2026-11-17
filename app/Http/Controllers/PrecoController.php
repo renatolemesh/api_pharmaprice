@@ -73,7 +73,9 @@ class PrecoController extends Controller
                 'prod.produto_id',
                 'ip.link',
                 'ip.ultima_coleta_em',
-                'ip.ativo'
+                // 0/1, como no MySQL, e nao true/false: o front compara com
+                // `ativo === 0` para marcar o produto inativo.
+                DB::raw('ip.ativo::int as ativo'),
             ]);
 
         // Produtos que nenhuma coleta encontra ha mais de 30 dias saem da

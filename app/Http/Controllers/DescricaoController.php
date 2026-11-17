@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Support\BuscaSimilar;
+use App\Support\FiltroDescricao;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Http\Request;
@@ -36,16 +37,13 @@ class DescricaoController extends Controller
                 fn () => BuscaSimilar::descricoes((string) $query, self::LIMITE)
             );
 
-            // null = indice fora do ar; segue para o LIKE.
-            if ($similares !== null) {
-                return response()->json(array_map(fn ($d) => ['descricao' => $d], $similares));
-            }
+            return response()->json(array_map(fn ($d) => ['descricao' => $d], $similares));
         }
 
         $cacheKey = 'produtos_descricao_' . md5((string) $query);
 
         $resultados = Cache::remember($cacheKey, 60 * 24, function () use ($query) {
-            return DB::table('produtos')
+            return DB::table('produtos as prod')
                 /*
                  * `distinct` porque a busca é PELA descrição, não pelo produto.
                  *
@@ -58,14 +56,14 @@ class DescricaoController extends Controller
                  * opções idênticas não é escolha.
                  */
                 ->distinct()
-                ->select('descricao')
-                ->when($query, function ($queryBuilder) use ($query) {
-                    return $queryBuilder->where('descricao', 'like', "%{$query}%");
-                })
+                ->select('prod.descricao')
+                ->whereNotNull('prod.descricao')
+                // Mesmo LIKE da busca: sem diferenciar maiuscula nem acento.
+                ->when($query, fn ($q) => FiltroDescricao::contem($q, 'prod', (string) $query))
                 // Ordem estável: sem `order by`, duas chamadas iguais podem
                 // devolver recortes diferentes das mesmas 30 linhas, e a
                 // sugestão dança embaixo do cursor de quem está digitando.
-                ->orderBy('descricao')
+                ->orderBy('prod.descricao')
                 ->limit(self::LIMITE)
                 ->get();
         });

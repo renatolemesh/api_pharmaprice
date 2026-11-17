@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Support\FiltroDescricao;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
@@ -171,7 +172,8 @@ class HistoricoController extends Controller
         if ($filtros['ean']) {
             $query->where('produtos.EAN', $filtros['ean']);
         } elseif ($filtros['descricao']) {
-            $query->where('produtos.descricao', 'like', '%' . $filtros['descricao'] . '%');
+            // Mesma regra da busca: sem diferenciar maiuscula nem acento.
+            FiltroDescricao::contem($query, 'produtos', $filtros['descricao']);
         }
 
         if ($filtros['farmacia']) {
